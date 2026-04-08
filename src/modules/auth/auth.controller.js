@@ -2,14 +2,14 @@ import * as authService from './auth.service.js';
 
 export const register = async (req, res) => {
   try {
-    const { email, password, role } = req.body.model;
+    const { email, password, role } = req.body;
     if (!email || !password || !role) {
       return res.status(400).json({ message: 'A required field is missing' });
     }
     if (await authService.checkEmail(email)) {
       return res.status(400).json({ message: 'Email already exists' });
     }
-    await authService.register(req.body.model);
+    await authService.register(req.body);
     res.status(201).json({ message: 'User created successfully' });
   } catch (err) {
     res.status(401).json({ message: "Invalid registration" });
@@ -18,6 +18,9 @@ export const register = async (req, res) => {
 export const login = async (req, res) => {
   try {
     const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ message: 'A required field is missing' });
+    }
     const ip = req.ip;
     const device = req.headers['user-agent'];
     const result = await authService.login(email, password, ip, device);

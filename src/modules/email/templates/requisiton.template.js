@@ -204,7 +204,7 @@ const requisitionEmailTemplate = (req) => {
     </table>
 
     <div class="button-container">
-      <a href="" class="button">
+      <a href="https://preshailen.github.io/fleet-frontend/auth/login" class="button">
         <span class="button-icon">🔐</span>
         Go to Login
       </a>

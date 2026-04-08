@@ -4,9 +4,8 @@ import Session from '../../models/session.model.js';
 import { generateAccessToken, generateRefreshToken } from './token.service.js';
 
 export const register = async (model) => {
-  const { email, password, role } = model;
-  const hashedPassword = await bcrypt.hash(password, parseInt(process.env.BCRYPT_SALT_ROUNDS) || 12);
-  const user = await User.create({ email: email, password: hashedPassword, roles: role });
+  const hashedPassword = await bcrypt.hash(model.password, parseInt(process.env.BCRYPT_SALT_ROUNDS) || 12);
+  await User.create({ email: model.email, password: hashedPassword, roles: model.role });
   
   return true;
 }

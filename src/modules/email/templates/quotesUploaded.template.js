@@ -1,4 +1,6 @@
 const quotesUploadedEmail = (requisitionId) => {
+  const loginUrl = "https://preshailen.github.io/fleet-frontend/auth/login";
+
   return `
   <!DOCTYPE html>
   <html>
@@ -7,14 +9,14 @@ const quotesUploadedEmail = (requisitionId) => {
     <title>Quotes Uploaded</title>
   </head>
 
-  <body style="margin:0; padding:0; background:#f4f4f4; font-family: Arial, sans-serif;">
+  <body style="margin:0; padding:0; background:#f4f6f8; font-family: Arial, sans-serif;">
 
-    <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f4; padding:20px;">
+    <table width="100%" cellpadding="0" cellspacing="0" style="padding:20px; background:#f4f6f8;">
       <tr>
         <td align="center">
 
           <!-- Container -->
-          <table width="500" cellpadding="0" cellspacing="0" style="background:#ffffff; border-radius:8px; padding:30px;">
+          <table width="500" cellpadding="0" cellspacing="0" style="background:#ffffff; border-radius:10px; padding:30px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">
 
             <!-- Header -->
             <tr>
@@ -34,6 +36,41 @@ const quotesUploadedEmail = (requisitionId) => {
             <tr>
               <td align="center" style="padding:15px; background:#fafafa; border-radius:6px; font-size:16px; font-weight:bold; color:#333;">
                 Requisition ID: ${requisitionId}
+              </td>
+            </tr>
+
+            <!-- Bulletproof Button -->
+            <tr>
+              <td align="center" style="padding-top:30px;">
+
+                <table cellpadding="0" cellspacing="0" border="0">
+                  <tr>
+                    <td align="center" bgcolor="#007bff" style="border-radius:6px;">
+                      <a href="${loginUrl}"
+                         target="_blank"
+                         style="
+                           display:inline-block;
+                           padding:12px 22px;
+                           font-size:14px;
+                           font-weight:bold;
+                           color:#ffffff;
+                           text-decoration:none;
+                           border-radius:6px;
+                           font-family: Arial, sans-serif;
+                         ">
+                        🔐 Go to Login
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+
+              </td>
+            </tr>
+
+            <!-- Note -->
+            <tr>
+              <td style="padding-top:20px; font-size:13px; color:#666; text-align:center;">
+                If you don't have an account, please sign up and select <b>"Supplier"</b>.
               </td>
             </tr>
 
