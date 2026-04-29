@@ -1,80 +1,99 @@
 import ExcelJS from "exceljs";
 import VehicleRecord from "../../models/vehicle-records/vehicleRecord.model.js";
 import pagination from '../../utils/pagination.js';
+import mongoose from "mongoose";
 
-export const uploadRecords = async (buffer) => {
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(buffer);
+const BATCH_SIZE = 500;
 
-  const sheet = workbook.worksheets[0];
-  const headers = extractHeaders(sheet);
+export const uploadRecords = async (filePath) => {
+  const session = await mongoose.startSession();
 
-  const validDocs = [];
-  const rejected = [];
-
-  sheet.eachRow((row, rowNumber) => {
-    if (rowNumber === 1) return;
-
-    try {
-      const raw = mapRow(row, headers);
-      const shaped = enforceSchema(raw);
-      const cleaned = cleanRow(shaped);
-      validDocs.push(cleaned);
-    } catch (err) {
-      rejected.push({
-        row: rowNumber,
-        error: err.message,
-        raw: row.values
-      });
-    }
-  });
-
-  if (rejected.length) {
-    const error = new Error("Data error found");
-    error.details = rejected;
-    throw error;
-  }
-  if (!validDocs.length) {
-    return {
-      inserted: 0,
-      rejectedCount: rejected.length,
-      rejected
-    };
-  }
+  let allErrors = [];
+  let inserted = 0;
 
   try {
-     const result = await VehicleRecord.insertMany(validDocs);
+    await session.startTransaction();
 
-    return {
-      inserted: result.length,
-      rejectedCount: rejected.length,
-      rejected
-    };
+    const workbook = new ExcelJS.stream.xlsx.WorkbookReader(filePath);
 
-  } catch (err) {
-    if (err.name === "ValidationError") {
-      const details = Object.values(err.errors).map(e => ({
-        field: e.path,
-        value: e.value,
-        message: e.message
-      }));
+    let headers = {};
+    let batch = [];
 
+    for await (const worksheet of workbook) {
+      for await (const row of worksheet) {
+
+        if (row.number === 1) {
+          headers = extractHeadersFromStream(row);
+          continue;
+        }
+
+        try {
+          const raw = mapRowStream(row, headers);
+          const shaped = enforceSchema(raw);
+          const cleaned = cleanRow(shaped);
+
+          batch.push({
+            ...cleaned,
+            __rowNumber: row.number
+          });
+
+        } catch (err) {
+          allErrors.push({
+            row: row.number,
+            field: null,
+            value: null,
+            message: err.message
+          });
+        }
+
+        if (batch.length >= BATCH_SIZE) {
+          await insertBatch(batch, session, allErrors);
+          inserted += batch.length;
+          batch = [];
+        }
+      }
+    }
+
+    if (batch.length) {
+      await insertBatch(batch, session, allErrors);
+      inserted += batch.length;
+    }
+
+    // 🚨 If ANY errors → throw (DO NOT abort here)
+    if (allErrors.length) {
       const error = new Error("Vehicle record validation failed");
-      error.details = details;
-
+      error.details = allErrors;
       throw error;
     }
-    const error = new Error(err.message || "Database insert failed");
-    error.details = err;
+
+    await session.commitTransaction();
+    return { inserted };
+
+  } catch (err) {
+    // ✅ Abort ONLY if transaction is still active
+    if (session.inTransaction()) {
+      await session.abortTransaction();
+    }
+
+    if (err.details) {
+      throw err;
+    }
+
+    const error = new Error(err.message || "Upload failed");
+    error.details = allErrors.length ? allErrors : err;
 
     throw error;
+
+  } finally {
+    session.endSession();
   }
 };
 export const getRecords = async (req) => {
   return await pagination(VehicleRecord, req.query, {
     searchFields: [
       'supplierName', 'businessUnit', 'divisionDepotDepartment', 'costCentre', 'area', 'province', 'responsibleManager',
-      'regNo','contractNo', 'contractType', 'rateCategory', 'make', 'model', 'fuelType', 'dealStatus', 'supplierResponsibleName'
+      'regNo','contractNo', 'contractType', 'rateCategory', 'make', 'model', 'fuelType', 'engineCapacity',
+      'dealStatus', 'supplierResponsibleName'
     ]
   });
 }
@@ -478,61 +497,7 @@ const cleanRow = (row) => {
 
   return cleaned;
 };
-const getCellValue = (cell, key) => {
-  if (!cell) return null;
 
-  let value = cell.value;
-
-  if (value instanceof Date) {
-    return value;
-  }
-
-  if (value && typeof value === "object") {
-    if ("result" in value) {
-      value = value.result;
-    } else if ("text" in value) {
-      value = value.text;
-    } else if ("richText" in value) {
-      value = value.richText.map(rt => rt.text).join("");
-    } else {
-      return null;
-    }
-  }
-
-  if (value === null || value === undefined || value === "") {
-    return null;
-  }
-
-  if (cell.type === ExcelJS.ValueType.Date) {
-    return value;
-  }
-
-  if (DATE_FIELDS.has(key)) {
-    if (typeof value === "number") {
-      const excelEpoch = new Date(1899, 11, 30);
-      return new Date(excelEpoch.getTime() + value * 86400000);
-    }
-
-    if (typeof value === "string") {
-      const parsed = new Date(value);
-      return isNaN(parsed) ? null : parsed;
-    }
-
-    return null;
-  }
-
-  if (typeof value === "number") {
-    return value;
-  }
-
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!isNaN(trimmed)) return Number(trimmed);
-    return trimmed;
-  }
-
-  return value;
-};
 const computeDerivedFields = (doc) => {
   const result = { ...doc };
 
@@ -620,3 +585,92 @@ const extractHeaders = (sheet) => {
   return headers;
 };
 /*==================HELPERS========================*/
+
+const insertBatch = async (batch, session, allErrors) => {
+  try {
+    await VehicleRecord.insertMany(batch, {
+      session,
+      ordered: true
+    });
+  } catch (err) {
+
+    // 🔥 Mongoose validation errors
+    if (err.name === "ValidationError") {
+      Object.values(err.errors).forEach(e => {
+        const doc = batch[0]; // fallback if index missing
+
+        allErrors.push({
+          row: doc.__rowNumber,
+          field: e.path,
+          value: e.value,
+          message: e.message
+        });
+      });
+      return;
+    }
+
+    // 🔥 Mongo bulk write errors
+    if (err.writeErrors) {
+      err.writeErrors.forEach(e => {
+        const failedDoc = batch[e.index];
+
+        allErrors.push({
+          row: failedDoc?.__rowNumber,
+          field: null,
+          value: null,
+          message: e.errmsg
+        });
+      });
+      return;
+    }
+
+    throw err;
+  }
+};
+
+const extractHeadersFromStream = (row) => {
+  const headers = {};
+
+  row.eachCell((cell, colNumber) => {
+    const normalized = normalizeHeader(cell.text || cell.value);
+    const key = headerMap[normalized];
+    headers[colNumber] = key || null;
+  });
+
+  return headers;
+};
+
+const mapRowStream = (row, headers) => {
+  const obj = {};
+
+  row.eachCell((cell, colNumber) => {
+    const key = headers[colNumber];
+    if (!key) return;
+
+    obj[key] = getCellValue(cell, key);
+  });
+
+  return computeDerivedFields(obj);
+};
+
+const getCellValue = (cell, key) => {
+  let value = cell.value;
+
+  if (value instanceof Date) return value;
+
+  if (value && typeof value === "object") {
+    if ("text" in value) return value.text;
+    if ("result" in value) return value.result;
+    return null;
+  }
+
+  if (value === "" || value === undefined) return null;
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!isNaN(trimmed)) return Number(trimmed);
+    return trimmed;
+  }
+
+  return value;
+};

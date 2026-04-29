@@ -29,9 +29,9 @@ const vehicleRecordSchema = new mongoose.Schema({
 
     make: { type: String , trim: true },
     model: { type: String , trim: true },
-    year: { type: Number  },
+    year: { type: String  },
     fuelType: { type: String  },
-    engineCapacity: { type: Number  },
+    engineCapacity: { type: String  },
 
     tyresAllocated: { type: Number  },
     tyresUsed: { type: Number  },
