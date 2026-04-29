@@ -6,9 +6,9 @@ const upload = multer({ storage: multer.memoryStorage() });
 const router = express.Router();
 
 router.get('/getRequisitions', controller.getRequisitions);
+router.get('/getRequisitionById/:id', controller.getRequisitionById);
 router.get('/getAttachedQuotes/:id', controller.getAttachedQuotes);
 router.get('/getSignedPdfUrl/:url', controller.getSignedPdfUrl);
-router.get('/getRequisitionSpecificationById/:id', controller.getRequisitionSpecificationById);
 router.get('/getSupplierLeadTime', controller.getSupplierLeadTime);
 router.post('/updateRequisitionStatus/:id/:status', controller.updateRequisitionStatus);
 router.post('/rejectRequisition/:id', controller.rejectRequisition);

@@ -10,5 +10,5 @@ export const generateAccessToken = (user) => {
 };
 
 export const generateRefreshToken = () => {
-  return uuidv4(); // Opaque token (enterprise best practice)
+  return uuidv4();
 };

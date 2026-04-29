@@ -6,7 +6,7 @@ export const register = async (req, res) => {
     if (!email || !password || !role) {
       return res.status(400).json({ message: 'A required field is missing' });
     }
-    if (await authService.checkEmail(email)) {
+    if (await authService.checkUserExists(email)) {
       return res.status(400).json({ message: 'Email already exists' });
     }
     await authService.register(req.body);
@@ -25,17 +25,19 @@ export const login = async (req, res) => {
     const device = req.headers['user-agent'];
     const result = await authService.login(email, password, ip, device);
     
+    const isProduction = process.env.NODE_ENV === 'production';
+
     res.cookie("accessToken", result.accessToken, {
       httpOnly: true,
-      secure: true,
-      sameSite: "lax",
+      secure: isProduction,
+      sameSite: isProduction ? "none" : "lax",
       maxAge: 15 * 60 * 1000,
       path: "/"
     });
     res.cookie("refreshToken", result.refreshToken, {
       httpOnly: true,
-      secure: true,
-      sameSite: "lax",
+      secure: isProduction,
+      sameSite:  isProduction ? "none" : "lax",
       maxAge: 7 * 24 * 60 * 60 * 1000,
       path: "/"
     });
@@ -54,19 +56,21 @@ export const refresh = async (req, res) => {
 
     const { newAccessToken, newRefreshToken, user } = await authService.refresh(oldToken);
 
+    const isProduction = process.env.NODE_ENV === 'production';
+
     res.cookie("accessToken", newAccessToken, {
       httpOnly: true,
-      secure: true,
+      secure: isProduction,
       maxAge: 15 * 60 * 1000,
-      sameSite: "lax",
+      sameSite: isProduction ? "none" : "lax",
       path: "/"
     });
 
     res.cookie("refreshToken", newRefreshToken, {
       httpOnly: true,
-      secure: true,
+      secure: isProduction,
       maxAge: 7 * 24 * 60 * 60 * 1000,
-      sameSite: "lax",
+      sameSite: isProduction ? "none" : "lax",
       path: "/"
     });
 
@@ -76,6 +80,17 @@ export const refresh = async (req, res) => {
   }
 };
 
+export const checkNonSupplierExists = async (req, res) => {
+  try {
+    if (!req.params.email) {
+      return res.status(400).json({ message: "Email is missing" });
+    }
+    res.status(200).json(await authService.checkNonSupplierExists(req.params.email));
+  } catch (err) {
+    res.status(401).json({ message: "Error with email"});
+  }
+}
+
 export const logout = async (req, res) => {
   try {
     await authService.logout(req.cookies.refreshToken);
@@ -84,8 +99,4 @@ export const logout = async (req, res) => {
   } catch (err) {
     res.status(401).json({ message: "Invalid logout" });
   }
-};
-
-export const me = async (req, res) => {
-  res.json(req.user);
 };

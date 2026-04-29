@@ -67,13 +67,6 @@ const quotesUploadedEmail = (requisitionId) => {
               </td>
             </tr>
 
-            <!-- Note -->
-            <tr>
-              <td style="padding-top:20px; font-size:13px; color:#666; text-align:center;">
-                If you don't have an account, please sign up and select <b>"Supplier"</b>.
-              </td>
-            </tr>
-
             <!-- Footer -->
             <tr>
               <td style="padding-top:25px; font-size:12px; color:#999; text-align:center;">

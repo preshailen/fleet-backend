@@ -1,7 +1,6 @@
 import Requisition from '../../models/requisition/requisition.model.js';
 import { sendEmail } from '../email/email.service.js';
 import requisitionEmailTemplate from '../email/templates/requisiton.template.js';
-import specificationTemplate from './templates/specification.template.js';
 import pagination from '../../utils/pagination.js';
 import { uploadToR2, deleteFromR2, getSignedUrlFromR2 } from '../../utils/r2uploader.js';
 import Quote from '../../models/requisition/quote.model.js';
@@ -10,14 +9,14 @@ import quotesUploadedTemplate from '../email/templates/quotesUploaded.template.j
 export const getRequisitions = async (req) => {
   return await pagination(Requisition, req.query, {});
 }
+export const getRequisitionById = async (id) => {
+  return await Requisition.findById(id);
+}
 export const getAttachedQuotes = async (id) => {
   return await Quote.find({ requisition: id });
 }
 export const getSignedPdfUrl = async (url) => {
   return await getSignedUrlFromR2(url);
-}
-export const getRequisitionSpecificationById = async (id) => {
-  return specificationTemplate(await Requisition.findOne({ _id: id }));
 }
 export const getSupplierLeadTime = async ({ supplierEmail } = {}) => {
   const match = {

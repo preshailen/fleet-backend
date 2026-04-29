@@ -173,8 +173,6 @@ const requisitionEmailTemplate = (req) => {
       }
 
       ${renderRow('Vehicle Type', formatValue(req.vehicleType))}
-      ${renderRow('Make', formatValue(req.make))}
-      ${renderRow('Model', formatValue(req.model))}
       ${renderRow('Engine Size', formatValue(req.engineSize))}
       ${renderRow('Fuel Type', formatValue(req.fuelType))}
       ${renderRow('Transmission', formatValue(req.transmission))}
@@ -183,7 +181,6 @@ const requisitionEmailTemplate = (req) => {
       ${renderAccessoriesList(req.accessories)}
 
       ${renderRow('Vehicle Additional Info', formatValue(req.vehicleAdditionalInfo))}
-      ${renderRow('Intended Use', formatValue(req.intendedUse))}
 
       ${
         !isEmpty(req.estimatedMonthlyKms)
@@ -204,7 +201,7 @@ const requisitionEmailTemplate = (req) => {
     </table>
 
     <div class="button-container">
-      <a href="https://preshailen.github.io/fleet-frontend/auth/login" class="button">
+      <a href="https://preshailen.github.io/fleet-frontend/auth/supplier-register" class="button">
         <span class="button-icon">🔐</span>
         Go to Login
       </a>
@@ -212,6 +209,7 @@ const requisitionEmailTemplate = (req) => {
 
     <div class="note">
       If you don't have an account, please sign up and select <b>"Supplier"</b>.
+      You will find the requisition under the fufill tab.
     </div>
 
     <div class="footer">

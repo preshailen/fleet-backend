@@ -7,6 +7,16 @@ export const getRequisitions = async (req, res) => {
     res.status(500).json({ message: err.message });
   } 
 }
+export const getRequisitionById = async (req, res) => {
+  try {
+    if (!req.params.id) {
+      return res.status(400).json({ message: 'Id is missing'})
+    }
+    res.status(200).json(await requisitionService.getRequisitionById(req.params.id));
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+}
 export const getAttachedQuotes = async (req, res) => {
   try {
     if (!req.params.id) {
@@ -23,16 +33,6 @@ export const getSignedPdfUrl = async (req, res) => {
       return res.status(400).json({ message: 'Url is missing'})
     }
     res.status(200).json(await requisitionService.getSignedPdfUrl(req.params.url));
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-}
-export const getRequisitionSpecificationById = async (req, res) => {
-  try {
-    if (!req.params.id) {
-      return res.status(400).json({ message: 'Id is missing'})
-    }
-    res.status(200).json(await requisitionService.getRequisitionSpecificationById(req.params.id));
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -68,13 +68,13 @@ export const rejectRequisition = async (req, res) => {
 export const createRequisition = async (req, res) => {
   try {
     const { companyName, department, requestingEmployee, contactNumber, contactEmail, supplierEmail, nameOfDriverAssigned,
-            purpose, type, vehicleType, make, model, engineSize, fuelType, transmission, colourPreference,
-            intendedUse, estimatedMonthlyKms, costCentre, budgetAvailable, estimatedVehicleCost,
+            purpose, type, vehicleType, engineSize, fuelType, transmission, colourPreference,
+            estimatedMonthlyKms, costCentre, budgetAvailable, estimatedVehicleCost,
             insurance, vehicleTracking, roadworthy, licensingAndRegistration
           } = req.body;
     if (!companyName || !department || !requestingEmployee || !contactNumber || !contactEmail || !supplierEmail || !nameOfDriverAssigned ||
-        !purpose || !type || !vehicleType || !make || !model || !engineSize || !fuelType || !transmission ||
-        !colourPreference || !intendedUse || (estimatedMonthlyKms == null) || !costCentre ||
+        !purpose || !type || !vehicleType || !engineSize || !fuelType || !transmission ||
+        !colourPreference || (estimatedMonthlyKms == null) || !costCentre ||
         (budgetAvailable == null) || (estimatedVehicleCost == null) || (insurance == null) || (vehicleTracking == null) ||
         (roadworthy == null) || (licensingAndRegistration == null)) {
       return res.status(400).json({ message: 'A required field is missing' });

@@ -7,8 +7,8 @@ const router = express.Router();
 router.post("/register", controller.register);
 router.post("/login", controller.login);
 router.post("/refresh", controller.refresh);
+router.get("/checkNonSupplierExists/:email", controller.checkNonSupplierExists);
 router.post("/logout", authenticate, controller.logout);
 
-router.get("/me", authenticate, controller.me);
 
 export default router;

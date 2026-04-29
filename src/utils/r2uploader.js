@@ -44,7 +44,6 @@ export const getSignedUrlFromR2 = async (url) => {
 };
 
 function stripUrl(url) { 
-  console.log(url);
   const key = "fulfillments/";
   const index = url.indexOf(key);
   if (index === -1) { throw new Error("Error uploading quotes") } 

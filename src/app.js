@@ -10,6 +10,10 @@ import errorMiddleware from './middleware/error.middleware.js';
 
 const app = express();
 
+if (process.env.NODE_ENV === 'production') {
+  app.set('trust proxy', 1);
+}
+
 // Security headers
 app.use(helmet());
 

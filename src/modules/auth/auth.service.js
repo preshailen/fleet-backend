@@ -63,6 +63,9 @@ export const logout = async (oldToken) => {
   return true;
 };
 
-export const checkEmail = async (email) => {
-  return !!(await User.exists({ email }));
+export const checkNonSupplierExists = async (email) => {
+  return !!(await User.exists({ email, roles: { $ne: 'SUPPLIER' } }));
 };
+export const checkUserExists = async (email) => {
+  return !!(await User.exists({ email }));
+}
