@@ -1,25 +1,33 @@
 import * as vehicleRecordsService from './vehicle-records.service.js';
-import fs from "fs/promises";
+import Busboy from "busboy";
 
-export const uploadRecords = async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({
-        message: "File does not exist"
+export const uploadRecords = (req, res) => {
+  const busboy = Busboy({ headers: req.headers });
+
+  let processingPromise;
+
+  busboy.on("file", (fieldname, file) => {
+    processingPromise = uploadRecords(file);
+  });
+
+  busboy.on("finish", async () => {
+    try {
+      if (!processingPromise) {
+        return res.status(400).json({ message: "No file uploaded" });
+      }
+
+      const result = await processingPromise;
+      res.json(result);
+
+    } catch (err) {
+      res.status(400).json({
+        message: err.message,
+        details: err.details || []
       });
     }
-    const result = await vehicleRecordsService.uploadRecords(req.file.path);
-    await fs.unlink(req.file.path);
-    res.status(201).json(result);
-  } catch (error) {
-    if (req.file) {
-      await fs.unlink(req.file.path).catch(() => {});
-    }
-    res.status(400).json({
-      message: error.message,
-      details: error.details || null
-    });
-  }
+  });
+
+  req.pipe(busboy);
 };
 export const getRecords = async(req, res) => {
   try {

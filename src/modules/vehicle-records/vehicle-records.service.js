@@ -5,51 +5,57 @@ import pagination from "../../utils/pagination.js";
 const BATCH_SIZE = 500;
 const VALIDATION_CONCURRENCY = 20;
 
-/* ================= MAIN ================= */
-
-export const uploadRecords = async (filePath) => {
+export const uploadRecords = async (stream) => {
   let headers = {};
   let batch = [];
   let validDocs = [];
   const errors = [];
 
-  const workbook = new ExcelJS.stream.xlsx.WorkbookReader(filePath);
+  const workbook = new ExcelJS.stream.xlsx.WorkbookReader(stream);
 
   for await (const worksheet of workbook) {
-    for await (const row of worksheet) {
 
-      // Header row
-      if (row.number === 1) {
-        headers = extractHeadersFromStream(row);
-        continue;
-      }
+  let paused = false;
 
-      try {
-        const raw = mapRowStream(row, headers);
-        const shaped = enforceSchema(raw);
-        const cleaned = cleanRow(shaped);
+  for await (const row of worksheet) {
 
-        batch.push({
-          ...cleaned,
-          __rowNumber: row.number
-        });
+    if (row.number === 1) {
+      headers = extractHeadersFromStream(row);
+      continue;
+    }
 
-      } catch (err) {
-        errors.push({
-          row: row.number,
-          field: null,
-          value: null,
-          message: err.message
-        });
-      }
+    try {
+      const raw = mapRowStream(row, headers);
+      const shaped = enforceSchema(raw);
+      const cleaned = cleanRow(shaped);
 
-      // Process batch
-      if (batch.length >= BATCH_SIZE) {
-        await processBatch(batch, validDocs, errors);
-        batch = [];
-      }
+      batch.push({
+        ...cleaned,
+        __rowNumber: row.number
+      });
+
+    } catch (err) {
+      errors.push({
+        row: row.number,
+        field: null,
+        value: null,
+        message: err.message
+      });
+    }
+
+    // 🔥 BACKPRESSURE CONTROL
+    if (batch.length >= BATCH_SIZE && !paused) {
+      paused = true;
+
+      worksheet.pause();                // ⛔ STOP stream
+      await processBatch(batch, validDocs, errors);
+      batch = [];
+      worksheet.resume();               // ▶️ RESUME stream
+
+      paused = false;
     }
   }
+}
 
   // Final batch
   if (batch.length) {
@@ -67,8 +73,6 @@ export const uploadRecords = async (filePath) => {
   return { inserted: validDocs.length };
 };
 
-/* ================= GET ================= */
-
 export const getRecords = async (req) => {
   return await pagination(VehicleRecord, req.query, {
     searchFields: [
@@ -79,67 +83,11 @@ export const getRecords = async (req) => {
   });
 };
 
-/* ================= BATCH PROCESSING ================= */
-
-const processBatch = async (batch, validDocs, errors) => {
-  await validateBatchParallel(batch, errors);
-
-  // Only keep valid ones
-  const errorRows = new Set(errors.map(e => e.row));
-  const cleanDocs = batch.filter(doc => !errorRows.has(doc.__rowNumber));
-
-  validDocs.push(...cleanDocs);
-};
-
-/* ================= PARALLEL VALIDATION ================= */
-
-const runWithConcurrency = async (items, limit, worker) => {
-  let index = 0;
-
-  const workers = new Array(limit).fill(null).map(async () => {
-    while (index < items.length) {
-      const currentIndex = index++;
-      await worker(items[currentIndex], currentIndex);
-    }
-  });
-
-  await Promise.all(workers);
-};
-
-const validateBatchParallel = async (batch, errors) => {
-  await runWithConcurrency(batch, VALIDATION_CONCURRENCY, async (doc) => {
-    try {
-      const record = new VehicleRecord(doc);
-      await record.validate();
-    } catch (err) {
-      if (err.name === "ValidationError") {
-        Object.values(err.errors).forEach(e => {
-          errors.push({
-            row: doc.__rowNumber,
-            field: e.path,
-            value: e.value,
-            message: e.message
-          });
-        });
-      } else {
-        errors.push({
-          row: doc.__rowNumber,
-          field: null,
-          value: null,
-          message: err.message
-        });
-      }
-    }
-  });
-};
-
 /* ================= HELPERS ================= */
-
 const normalizeHeader = (str) => {
   if (!str) return "";
   return str.toString().toLowerCase().replace(/[^a-z0-9]+/g, "").trim();
 };
-
 const extractHeadersFromStream = (row) => {
   const headers = {};
 
@@ -151,7 +99,6 @@ const extractHeadersFromStream = (row) => {
 
   return headers;
 };
-
 const mapRowStream = (row, headers) => {
   const obj = {};
 
@@ -164,7 +111,6 @@ const mapRowStream = (row, headers) => {
 
   return computeDerivedFields(obj);
 };
-
 const getCellValue = (cell) => {
   let value = cell.value;
 
@@ -186,11 +132,9 @@ const getCellValue = (cell) => {
 
   return value;
 };
-
 const enforceSchema = (row) => {
   return { ...BASE_SCHEMA, ...row };
 };
-
 const computeDerivedFields = (doc) => {
   const result = { ...doc };
 
@@ -220,14 +164,77 @@ const computeDerivedFields = (doc) => {
 
   return result;
 };
+const cleanRow = (row) => {
+  const cleaned = {};
 
+  Object.keys(row).forEach((key) => {
+    let value = row[key];
+
+    if (value === "" || value === undefined) {
+      value = null;
+    }
+
+    cleaned[key] = value;
+  });
+
+  return cleaned;
+};
+const processBatch = async (batch, validDocs, errors) => {
+  await validateBatchParallel(batch, errors);
+
+  // Only keep valid ones
+  const errorRows = new Set(errors.map(e => e.row));
+  const cleanDocs = batch.filter(doc => !errorRows.has(doc.__rowNumber));
+
+  validDocs.push(...cleanDocs);
+};
 const fail = (details) => {
   const error = new Error("Vehicle record validation failed");
   error.details = details;
   throw error;
 };
+const runWithConcurrency = async (items, limit, worker) => {
+  let index = 0;
+
+  const workers = new Array(limit).fill(null).map(async () => {
+    while (index < items.length) {
+      const currentIndex = index++;
+      await worker(items[currentIndex], currentIndex);
+    }
+  });
+
+  await Promise.all(workers);
+};
+const validateBatchParallel = async (batch, errors) => {
+  await runWithConcurrency(batch, VALIDATION_CONCURRENCY, async (doc) => {
+    try {
+      const record = new VehicleRecord(doc);
+      await record.validate();
+    } catch (err) {
+      if (err.name === "ValidationError") {
+        Object.values(err.errors).forEach(e => {
+          errors.push({
+            row: doc.__rowNumber,
+            field: e.path,
+            value: e.value,
+            message: e.message
+          });
+        });
+      } else {
+        errors.push({
+          row: doc.__rowNumber,
+          field: null,
+          value: null,
+          message: err.message
+        });
+      }
+    }
+  });
+};
 /*==================HELPERS========================*/
 
+
+/*==================DATA===========================*/
 const headerMap = {
   suppliername: "supplierName",
   month: "month",
@@ -532,132 +539,4 @@ const BASE_SCHEMA = {
   totalUnderUtilisationAmountInclVat: null,
   dateSold: null,
 };
-const mapRow = (row, headers) => {
-  const obj = {};
-
-  row.eachCell((cell, colNumber) => {
-    const key = headers[colNumber];
-    const value = getCellValue(cell, key);
-
-    if (key) {
-      obj[key] = value;
-    }
-  });
-
-  return computeDerivedFields(obj);
-};
-const cleanRow = (row) => {
-  const cleaned = {};
-
-  Object.keys(row).forEach((key) => {
-    let value = row[key];
-
-    if (value === "" || value === undefined) {
-      value = null;
-    }
-
-    cleaned[key] = value;
-  });
-
-  return cleaned;
-};
-
-
-const extractHeaders = (sheet) => {
-  const headers = {};
-  const firstRow = sheet.getRow(1);
-
-  const unmapped = [];
-
-  firstRow.eachCell((cell, colNumber) => {
-    let rawHeader = cell.value;
-
-    if (rawHeader && typeof rawHeader === "object") {
-      if (rawHeader.richText) {
-        rawHeader = rawHeader.richText.map(rt => rt.text).join("");
-      } else if (rawHeader.text) {
-        rawHeader = rawHeader.text;
-      } else {
-        rawHeader = String(rawHeader);
-      }
-    }
-
-    const normalized = normalizeHeader(rawHeader);
-    let key = headerMap[normalized];
-
-    if (normalized === "vat") {
-      const prev = normalizeHeader(firstRow.getCell(colNumber - 1).value);
-      const next = normalizeHeader(firstRow.getCell(colNumber + 1).value);
-
-      if (prev.includes("totalfixedrentalexclvat") && next.includes("totalfixedrentalinclvat")) {
-        key = "fixedRentalVat";
-      } else if (prev.includes("totalexcessamountexclvat") && next.includes("totalexcessamountinclvat")) {
-        key = "excessVat";
-      } else if (prev.includes("subtotalvariablecost") && next.includes("totalvariablecost")) {
-        key = "variableVat";
-      }
-    }
-
-    if (!key) {
-      unmapped.push({
-        rawHeader,
-        normalized,
-        colNumber
-      });
-    }
-
-    headers[colNumber] = key || null;
-  });
-
-  if (unmapped.length) {
-    const error = new Error("Unmapped headers found");
-    error.details = unmapped;
-    throw error;
-  }
-
-  return headers;
-};
-/*==================HELPERS========================*/
-
-const insertBatch = async (batch, session, allErrors) => {
-  try {
-    await VehicleRecord.insertMany(batch, {
-      session,
-      ordered: true
-    });
-  } catch (err) {
-
-    // 🔥 Mongoose validation errors
-    if (err.name === "ValidationError") {
-      Object.values(err.errors).forEach(e => {
-        const doc = batch[0]; // fallback if index missing
-
-        allErrors.push({
-          row: doc.__rowNumber,
-          field: e.path,
-          value: e.value,
-          message: e.message
-        });
-      });
-      return;
-    }
-
-    // 🔥 Mongo bulk write errors
-    if (err.writeErrors) {
-      err.writeErrors.forEach(e => {
-        const failedDoc = batch[e.index];
-
-        allErrors.push({
-          row: failedDoc?.__rowNumber,
-          field: null,
-          value: null,
-          message: e.errmsg
-        });
-      });
-      return;
-    }
-
-    throw err;
-  }
-};
-
+/*==================DATA===========================*/
