@@ -1,26 +1,28 @@
 import ExcelJS from "exceljs";
-import VehicleRecord from "../../models/vehicle-records/vehicleRecord.model.js";
-import pagination from '../../utils/pagination.js';
 import mongoose from "mongoose";
+import VehicleRecord from "../../models/vehicle-records/vehicleRecord.model.js";
 
 const BATCH_SIZE = 500;
 
 export const uploadRecords = async (filePath) => {
   const session = await mongoose.startSession();
 
-  let allErrors = [];
+  let headers = {};
+  let batch = [];
   let inserted = 0;
+  let allErrors = [];
+
+  let failed = false; // 🔥 HARD STOP FLAG
 
   try {
-    await session.startTransaction();
+    session.startTransaction();
 
     const workbook = new ExcelJS.stream.xlsx.WorkbookReader(filePath);
 
-    let headers = {};
-    let batch = [];
-
     for await (const worksheet of workbook) {
       for await (const row of worksheet) {
+
+        if (failed) break;
 
         if (row.number === 1) {
           headers = extractHeadersFromStream(row);
@@ -38,54 +40,65 @@ export const uploadRecords = async (filePath) => {
           });
 
         } catch (err) {
+          failed = true;
+
           allErrors.push({
             row: row.number,
             field: null,
             value: null,
             message: err.message
           });
+
+          break;
         }
 
         if (batch.length >= BATCH_SIZE) {
-          await insertBatch(batch, session, allErrors);
+          await insertBatch(batch, session);
           inserted += batch.length;
           batch = [];
         }
       }
     }
 
-    if (batch.length) {
-      await insertBatch(batch, session, allErrors);
+    // flush remaining batch ONLY if no failure
+    if (!failed && batch.length) {
+      await insertBatch(batch, session);
       inserted += batch.length;
     }
 
-    // 🚨 If ANY errors → throw (DO NOT abort here)
-    if (allErrors.length) {
+    // 🚨 If any error → force rollback
+    if (failed || allErrors.length) {
+      await session.abortTransaction();
+      session.endSession();
+
       const error = new Error("Vehicle record validation failed");
       error.details = allErrors;
+
       throw error;
     }
 
     await session.commitTransaction();
+    session.endSession();
+
     return { inserted };
 
   } catch (err) {
-    // ✅ Abort ONLY if transaction is still active
-    if (session.inTransaction()) {
-      await session.abortTransaction();
-    }
 
-    if (err.details) {
-      throw err;
-    }
+    // 🔥 SAFE ABORT (only if active)
+    try {
+      if (session.inTransaction()) {
+        await session.abortTransaction();
+      }
+    } catch (_) {}
+
+    session.endSession();
+
+    if (err.details) throw err;
 
     const error = new Error(err.message || "Upload failed");
-    error.details = allErrors.length ? allErrors : err;
+    error.details = allErrors;
 
     throw error;
-
-  } finally {
-    session.endSession();
   }
 };
 export const getRecords = async (req) => {
