@@ -191,18 +191,6 @@ const enforceSchema = (row) => {
   return { ...BASE_SCHEMA, ...row };
 };
 
-const cleanRow = (row) => {
-  const cleaned = {};
-
-  Object.keys(row).forEach((key) => {
-    let value = row[key];
-    if (value === "" || value === undefined) value = null;
-    cleaned[key] = value;
-  });
-
-  return cleaned;
-};
-
 const computeDerivedFields = (doc) => {
   const result = { ...doc };
 
@@ -238,3 +226,438 @@ const fail = (details) => {
   error.details = details;
   throw error;
 };
+/*==================HELPERS========================*/
+
+const headerMap = {
+  suppliername: "supplierName",
+  month: "month",
+  businessunit: "businessUnit",
+  divisiondepotdepartment: "divisionDepotDepartment",
+  costcentre: "costCentre",
+  area: "area",
+  province: "province",
+  responsiblemanager: "responsibleManager",
+
+  rfqsentdate: "rfqSentDate",
+  quotesreceiveddate: "quotesReceivedDate",
+  actualquotationdays: "actualQuotationDays",
+  targetquotationdays: "targetQuotationDays",
+  varianceforquotedays: "varianceForQuoteDays",
+
+  approvalofbestquotedate: "approvalOfBestQuoteDate",
+  vehicledeliverydate: "vehicleDeliveryDate",
+  actualdeliverydays: "actualDeliveryDays",
+  targetdeliverydays: "targetDeliveryDays",
+  variancefordeliverydays: "varianceForDeliveryDays",
+
+  regno: "regNo",
+  contractno: "contractNo",
+  contracttype: "contractType",
+  ratecategory: "rateCategory",
+
+  make: "make",
+  model: "model",
+  year: "year",
+  fueltype: "fuelType",
+  enginecapacity: "engineCapacity",
+
+  tyresallocated: "tyresAllocated",
+  tyresused: "tyresUsed",
+
+  retailprice: "retailPrice",
+  discountamount: "discountAmount",
+  discount: "discountPercent",
+  accessoryamount: "accessoryAmount",
+  financesundries: "financeSundries",
+
+  interest: "interestPercent",
+  residualvalue: "residualValue",
+  rv: "rvPercent",
+
+  startdate: "startDate",
+  enddate: "endDate",
+  contractperiod: "contractPeriod",
+
+  inclusivekmpermonth: "inclusiveKmPerMonth",
+  totalcontractkm: "totalContractKm",
+
+  licenceexpirydate: "licenceExpiryDate",
+
+  odostart: "odoStart",
+  odoend: "odoEnd",
+  kmtravelled: "kmTravelled",
+  kmtravelledltd: "kmTravelledLtd",
+  averageltdkm: "averageLtdKm",
+
+  fixedrental: "fixedRental",
+  repairsandmaintenance: "repairsAndMaintenance",
+  licencefee: "licenceFee",
+  trackingcostandservices: "trackingCostAndServices",
+  adminfee: "adminFee",
+
+  totalfixedrentalexclvat: "totalFixedRentalExclVat",
+  fixedrentalvat: "fixedRentalVat",
+  totalfixedrentalinclvat: "totalFixedRentalInclVat",
+
+  startdateofexcessbilling: "startDateOfExcessBilling",
+  enddateofexcessbilling: "endDateOfExcessBilling",
+
+  startodoofexcessbilling: "startOdoOfExcessBilling",
+  endodoofexcessbilling: "endOdoOfExcessBilling",
+
+  totalkmtravelled: "totalKmTravelled",
+  allowedkm: "allowedKm",
+  excesskmtravelled: "excessKmTravelled",
+
+  excessrmcpk: "excessRmCpk",
+  excessrvcpk: "excessRvCpk",
+
+  excessrmamount: "excessRmAmount",
+  excessrvamount: "excessRvAmount",
+
+  totalexcessamountexclvat: "totalExcessAmountExclVat",
+  excessvat: "excessVat",
+  totalexcessamountinclvat: "totalExcessAmountInclVat",
+
+  operatordefault: "operatorDefault",
+  accidentandwriteoffs: "accidentAndWriteOffs",
+  tyres: "tyres",
+  additionalcosts: "additionalCosts",
+  auxiliaryamount: "auxiliaryAmount",
+  oocp: "oocp",
+
+  fuelcost: "fuelCost",
+  fuellitres: "fuelLitres",
+  oilcost: "oilCost",
+  oillitres: "oilLitres",
+
+  monthlyfinescost: "monthlyFinesCost",
+  monthlyetollcost: "monthlyETollCost",
+
+  subtotalvariablecost: "subtotalVariableCost",
+  variablevat: "variableVat",
+  totalvariablecost: "totalVariableCost",
+
+  totalcostinclvat: "totalCostInclVat",
+  inputvat: "inputVat",
+  totalcostexclinputvat: "totalCostExclInputVat",
+
+  cpktco: "cpkTco",
+
+  maintenancedays: "maintenanceDays",
+  accidentsdays: "accidentsDays",
+  breakdownsdays: "breakdownsDays",
+
+  totalavailability: "totalAvailabilityPercent",
+
+  
+  restructuredcontractenddate: "restructuredContractEndDate",
+  restructuredcontractperiod: "restructuredContractPeriod",
+  restructuredinclusivekmpermonth: "restructuredInclusiveKmPerMonth",
+
+  fixedrentalpriortorestructure: "fixedRentalPriorToRestructure",
+  oversandundersincl5tolerance: "oversAndUndersInclTolerance",
+
+  estimatedreplacementdatetimekm: "estimatedReplacementDateTimeAndKm",
+  estimatedreplacementtime: "estimatedReplacementTime",
+  estimatedreplacementkm: "estimatedReplacementKm",
+
+  dealstatus: "dealStatus",
+  supplierresponsiblename: "supplierResponsibleName",
+
+  excessrmytd: "excessRmYtd",
+  excessrvytd: "excessRvYtd",
+  underutilisationrmytd: "underUtilisationRmYtd",
+  underutilisationrmcpk: "underUtilisationRmCpk",
+  totalunderutilisationrmamountexclvat: "totalUnderUtilisationRmAmountExclVat",
+  totalunderutilisationamountinclvat: "totalUnderUtilisationAmountInclVat",
+  datesold: "dateSold"
+};
+const DATE_FIELDS = new Set([
+  "month",
+  "rfqSentDate",
+  "quotesReceivedDate",
+  "approvalOfBestQuoteDate",
+  "vehicleDeliveryDate",
+  "startDate",
+  "endDate",
+  "licenceExpiryDate",
+  "startDateOfExcessBilling",
+  "endDateOfExcessBilling",
+  "restructuredContractEndDate",
+  "estimatedReplacementDateTimeAndKm",
+  "estimatedReplacementTime",
+  "dateSold"
+]);
+const BASE_SCHEMA = {
+  supplierName: null,
+  month: null,
+  businessUnit: null,
+  divisionDepotDepartment: null,
+  costCentre: null,
+  area: null,
+  province: null,
+  responsibleManager: null,
+
+  rfqSentDate: null,
+  quotesReceivedDate: null,
+  actualQuotationDays: null,
+  targetQuotationDays: null,
+  varianceForQuoteDays: null,
+
+  approvalOfBestQuoteDate: null,
+  vehicleDeliveryDate: null,
+  actualDeliveryDays: null,
+  targetDeliveryDays: null,
+  varianceForDeliveryDays: null,
+
+  regNo: null,
+  contractNo: null,
+  contractType: null,
+  rateCategory: null,
+
+  make: null,
+  model: null,
+  year: null,
+  fuelType: null,
+  engineCapacity: null,
+
+  tyresAllocated: null,
+  tyresUsed: null,
+
+  retailPrice: null,
+  discountAmount: null,
+  discountPercent: null,
+  accessoryAmount: null,
+  financeSundries: null,
+
+  interestPercent: null,
+  residualValue: null,
+  rvPercent: null,
+
+  startDate: null,
+  endDate: null,
+  contractPeriod: null,
+
+  inclusiveKmPerMonth: null,
+  totalContractKm: null,
+
+  licenceExpiryDate: null,
+  odoStart: null,
+  odoEnd: null,
+  kmTravelled: null,
+  kmTravelledLtd: null,
+  averageLtdKm: null,
+
+  fixedRental: null,
+  repairsAndMaintenance: null,
+  licenceFee: null,
+  trackingCostAndServices: null,
+  adminFee: null,
+
+  totalFixedRentalExclVat: null,
+  fixedRentalVat: null,
+  totalFixedRentalInclVat: null,
+
+  startDateOfExcessBilling: null,
+  endDateOfExcessBilling: null,
+
+  startOdoOfExcessBilling: null,
+  endOdoOfExcessBilling: null,
+
+  totalKmTravelled: null,
+  allowedKm: null,
+  excessKmTravelled: null,
+
+  excessRmCpk: null,
+  excessRvCpk: null,
+
+  excessRmAmount: null,
+  excessRvAmount: null,
+
+  totalExcessAmountExclVat: null,
+  excessVat: null,
+  totalExcessAmountInclVat: null,
+
+  operatorDefault: null,
+  accidentAndWriteOffs: null,
+  tyres: null,
+  additionalCosts: null,
+  auxiliaryAmount: null,
+  oocp: null,
+
+  fuelCost: null,
+  fuelLitres: null,
+  oilCost: null,
+  oilLitres: null,
+
+  monthlyFinesCost: null,
+  monthlyETollCost: null,
+
+  subtotalVariableCost: null,
+  variableVat: null,
+  totalVariableCost: null,
+
+  totalCostInclVat: null,
+  inputVat: null,
+  totalCostExclInputVat: null,
+
+  cpkTco: null,
+
+  maintenanceDays: null,
+  accidentsDays: null,
+  breakdownsDays: null,
+
+  totalAvailabilityPercent: null,
+
+  restructuredContractEndDate: null,
+  restructuredContractPeriod: null,
+  restructuredInclusiveKmPerMonth: null,
+
+  fixedRentalPriorToRestructure: null,
+  oversAndUndersInclTolerance: null,
+
+  estimatedReplacementDateTimeAndKm: null,
+  estimatedReplacementTime: null,
+  estimatedReplacementKm: null,
+
+  dealStatus: null,
+  supplierResponsibleName: null,
+
+  excessRmYtd: null,
+  excessRvYtd: null,
+  underUtilisationRmYtd: null,
+  underUtilisationRmCpk: null,
+  totalUnderUtilisationRmAmountExclVat: null,
+  totalUnderUtilisationAmountInclVat: null,
+  dateSold: null,
+};
+const mapRow = (row, headers) => {
+  const obj = {};
+
+  row.eachCell((cell, colNumber) => {
+    const key = headers[colNumber];
+    const value = getCellValue(cell, key);
+
+    if (key) {
+      obj[key] = value;
+    }
+  });
+
+  return computeDerivedFields(obj);
+};
+const cleanRow = (row) => {
+  const cleaned = {};
+
+  Object.keys(row).forEach((key) => {
+    let value = row[key];
+
+    if (value === "" || value === undefined) {
+      value = null;
+    }
+
+    cleaned[key] = value;
+  });
+
+  return cleaned;
+};
+
+
+const extractHeaders = (sheet) => {
+  const headers = {};
+  const firstRow = sheet.getRow(1);
+
+  const unmapped = [];
+
+  firstRow.eachCell((cell, colNumber) => {
+    let rawHeader = cell.value;
+
+    if (rawHeader && typeof rawHeader === "object") {
+      if (rawHeader.richText) {
+        rawHeader = rawHeader.richText.map(rt => rt.text).join("");
+      } else if (rawHeader.text) {
+        rawHeader = rawHeader.text;
+      } else {
+        rawHeader = String(rawHeader);
+      }
+    }
+
+    const normalized = normalizeHeader(rawHeader);
+    let key = headerMap[normalized];
+
+    if (normalized === "vat") {
+      const prev = normalizeHeader(firstRow.getCell(colNumber - 1).value);
+      const next = normalizeHeader(firstRow.getCell(colNumber + 1).value);
+
+      if (prev.includes("totalfixedrentalexclvat") && next.includes("totalfixedrentalinclvat")) {
+        key = "fixedRentalVat";
+      } else if (prev.includes("totalexcessamountexclvat") && next.includes("totalexcessamountinclvat")) {
+        key = "excessVat";
+      } else if (prev.includes("subtotalvariablecost") && next.includes("totalvariablecost")) {
+        key = "variableVat";
+      }
+    }
+
+    if (!key) {
+      unmapped.push({
+        rawHeader,
+        normalized,
+        colNumber
+      });
+    }
+
+    headers[colNumber] = key || null;
+  });
+
+  if (unmapped.length) {
+    const error = new Error("Unmapped headers found");
+    error.details = unmapped;
+    throw error;
+  }
+
+  return headers;
+};
+/*==================HELPERS========================*/
+
+const insertBatch = async (batch, session, allErrors) => {
+  try {
+    await VehicleRecord.insertMany(batch, {
+      session,
+      ordered: true
+    });
+  } catch (err) {
+
+    // 🔥 Mongoose validation errors
+    if (err.name === "ValidationError") {
+      Object.values(err.errors).forEach(e => {
+        const doc = batch[0]; // fallback if index missing
+
+        allErrors.push({
+          row: doc.__rowNumber,
+          field: e.path,
+          value: e.value,
+          message: e.message
+        });
+      });
+      return;
+    }
+
+    // 🔥 Mongo bulk write errors
+    if (err.writeErrors) {
+      err.writeErrors.forEach(e => {
+        const failedDoc = batch[e.index];
+
+        allErrors.push({
+          row: failedDoc?.__rowNumber,
+          field: null,
+          value: null,
+          message: e.errmsg
+        });
+      });
+      return;
+    }
+
+    throw err;
+  }
+};
+
