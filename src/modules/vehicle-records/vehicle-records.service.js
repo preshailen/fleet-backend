@@ -630,3 +630,14 @@ const getCellValue = (cell, key) => {
 
   return value;
 };
+
+const safeInsert = async (batch, session) => {
+  if (!session.inTransaction()) {
+    throw new Error("Transaction already aborted");
+  }
+
+  await VehicleRecord.insertMany(batch, {
+    session,
+    ordered: true
+  });
+};
