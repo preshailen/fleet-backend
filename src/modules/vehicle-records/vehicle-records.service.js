@@ -10,9 +10,9 @@ export const uploadRecords = async (filePath) => {
   let headers = {};
   let batch = [];
   let inserted = 0;
-  const allErrors = [];
+  const errors = [];
 
-  let failed = false;
+  let active = true; // 🔥 single source of truth
 
   try {
     session.startTransaction();
@@ -22,27 +22,24 @@ export const uploadRecords = async (filePath) => {
     for await (const worksheet of workbook) {
       for await (const row of worksheet) {
 
-        if (failed) break;
+        if (!active) break;
 
         if (row.number === 1) {
           headers = extractHeadersFromStream(row);
           continue;
         }
 
+        let cleaned;
+
         try {
           const raw = mapRowStream(row, headers);
           const shaped = enforceSchema(raw);
-          const cleaned = cleanRow(shaped);
-
-          batch.push({
-            ...cleaned,
-            __rowNumber: row.number
-          });
+          cleaned = cleanRow(shaped);
 
         } catch (err) {
-          failed = true;
+          active = false;
 
-          allErrors.push({
+          errors.push({
             row: row.number,
             field: null,
             value: null,
@@ -52,49 +49,55 @@ export const uploadRecords = async (filePath) => {
           break;
         }
 
-        if (!failed && batch.length >= BATCH_SIZE) {
-          await safeInsert(batch, session);
+        batch.push({
+          ...cleaned,
+          __rowNumber: row.number
+        });
+
+        if (active && batch.length >= BATCH_SIZE) {
+          await insertSafe(batch, session, active);
           inserted += batch.length;
           batch = [];
         }
       }
     }
 
-    // flush only if no failure
-    if (!failed && batch.length) {
-      await safeInsert(batch, session);
+    // final flush
+    if (active && batch.length) {
+      await insertSafe(batch, session, active);
       inserted += batch.length;
     }
 
-    // 🚨 failure = rollback ONLY ONCE
-    if (failed || allErrors.length) {
+    // 🚨 fail → rollback EVERYTHING
+    if (!active || errors.length) {
       await session.abortTransaction();
-      session.endSession();
-
-      const error = new Error("Vehicle record validation failed");
-      error.details = allErrors;
-      throw error;
+      return fail(errors);
     }
 
     await session.commitTransaction();
-    session.endSession();
 
     return { inserted };
 
   } catch (err) {
+
+    // 🔥 NEVER reuse aborted txn
     try {
       if (session.inTransaction()) {
         await session.abortTransaction();
       }
     } catch (_) {}
 
+    return fail([
+      {
+        row: null,
+        field: null,
+        value: null,
+        message: err.message
+      }
+    ]);
+
+  } finally {
     session.endSession();
-
-    if (err.details) throw err;
-
-    const error = new Error(err.message || "Upload failed");
-    error.details = allErrors;
-    throw error;
   }
 };
 export const getRecords = async (req) => {
@@ -631,13 +634,18 @@ const getCellValue = (cell, key) => {
   return value;
 };
 
-const safeInsert = async (batch, session) => {
-  if (!session.inTransaction()) {
-    throw new Error("Transaction already aborted");
+const insertSafe = async (batch, session, active) => {
+  if (!active || !session.inTransaction()) {
+    return; // 🔥 prevents txn reuse crash
   }
 
   await VehicleRecord.insertMany(batch, {
-    session,
-    ordered: true
+    session
   });
+};
+
+const fail = (details) => {
+  const error = new Error("Vehicle record validation failed");
+  error.details = details;
+  throw error;
 };
