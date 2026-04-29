@@ -10,9 +10,9 @@ export const uploadRecords = async (filePath) => {
   let headers = {};
   let batch = [];
   let inserted = 0;
-  let allErrors = [];
+  const allErrors = [];
 
-  let failed = false; // 🔥 HARD STOP FLAG
+  let failed = false;
 
   try {
     session.startTransaction();
@@ -52,28 +52,27 @@ export const uploadRecords = async (filePath) => {
           break;
         }
 
-        if (batch.length >= BATCH_SIZE) {
-          await insertBatch(batch, session);
+        if (!failed && batch.length >= BATCH_SIZE) {
+          await safeInsert(batch, session);
           inserted += batch.length;
           batch = [];
         }
       }
     }
 
-    // flush remaining batch ONLY if no failure
+    // flush only if no failure
     if (!failed && batch.length) {
-      await insertBatch(batch, session);
+      await safeInsert(batch, session);
       inserted += batch.length;
     }
 
-    // 🚨 If any error → force rollback
+    // 🚨 failure = rollback ONLY ONCE
     if (failed || allErrors.length) {
       await session.abortTransaction();
       session.endSession();
 
       const error = new Error("Vehicle record validation failed");
       error.details = allErrors;
-
       throw error;
     }
 
@@ -83,8 +82,6 @@ export const uploadRecords = async (filePath) => {
     return { inserted };
 
   } catch (err) {
-
-    // 🔥 SAFE ABORT (only if active)
     try {
       if (session.inTransaction()) {
         await session.abortTransaction();
@@ -97,7 +94,6 @@ export const uploadRecords = async (filePath) => {
 
     const error = new Error(err.message || "Upload failed");
     error.details = allErrors;
-
     throw error;
   }
 };
@@ -113,59 +109,6 @@ export const getRecords = async (req) => {
 
 /*==================HELPERS========================*/
 
-export function isExcelFile(buffer, file) {
-  if (!file) return false;
-
-  const validMimeTypes = [
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-  ];
-
-  const isValidMime = validMimeTypes.includes(file.mimetype);
-  const isValidExt = file.originalname.toLowerCase().endsWith('.xlsx');
-
-
-  if (!isValidMime && !isValidExt) return false;
-
-  // --- Check ZIP header (PK)
-  const isZip =
-    buffer[0] === 0x50 && // P
-    buffer[1] === 0x4b && // K
-    (buffer[2] === 0x03 || buffer[2] === 0x05 || buffer[2] === 0x07);
-
-  if (!isZip) return false;
-
-  // --- Check End of Central Directory (basic ZIP integrity)
-  const footer = buffer.slice(-22);
-
-  const hasEndOfCentralDir =
-    footer.includes(0x50) && footer.includes(0x4b);
-
-  if (!hasEndOfCentralDir) return false;
-
-  return true;
-}
-export async function validateExcelContent(buffer) {
-  try {
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(buffer);
-    if (!workbook.worksheets || workbook.worksheets.length === 0) return false;
-    
-    const firstSheet = workbook.worksheets[0];
-
-    let hasData = false;
-
-    firstSheet.eachRow((row, rowNumber) => {
-      if (rowNumber > 1 && row.values.length > 1) {
-        hasData = true;
-      }
-    });
-    return hasData;
-
-  } catch (err) {
-    console.log(err);
-    return false;
-  }
-}
 const normalizeHeader = (str) => {
   if (!str) return "";
   return str
