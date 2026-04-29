@@ -1,591 +1,143 @@
 import ExcelJS from "exceljs";
-import mongoose from "mongoose";
 import VehicleRecord from "../../models/vehicle-records/vehicleRecord.model.js";
-import pagination from '../../utils/pagination.js';
+import pagination from "../../utils/pagination.js";
 
 const BATCH_SIZE = 500;
+const VALIDATION_CONCURRENCY = 20;
+
+/* ================= MAIN ================= */
 
 export const uploadRecords = async (filePath) => {
-  const session = await mongoose.startSession();
-
   let headers = {};
   let batch = [];
-  let inserted = 0;
+  let validDocs = [];
   const errors = [];
 
-  let active = true; // 🔥 single source of truth
+  const workbook = new ExcelJS.stream.xlsx.WorkbookReader(filePath);
 
-  try {
-    session.startTransaction();
+  for await (const worksheet of workbook) {
+    for await (const row of worksheet) {
 
-    const workbook = new ExcelJS.stream.xlsx.WorkbookReader(filePath);
+      // Header row
+      if (row.number === 1) {
+        headers = extractHeadersFromStream(row);
+        continue;
+      }
 
-    for await (const worksheet of workbook) {
-      for await (const row of worksheet) {
-
-        if (!active) break;
-
-        if (row.number === 1) {
-          headers = extractHeadersFromStream(row);
-          continue;
-        }
-
-        let cleaned;
-
-        try {
-          const raw = mapRowStream(row, headers);
-          const shaped = enforceSchema(raw);
-          cleaned = cleanRow(shaped);
-
-        } catch (err) {
-          active = false;
-
-          errors.push({
-            row: row.number,
-            field: null,
-            value: null,
-            message: err.message
-          });
-
-          break;
-        }
+      try {
+        const raw = mapRowStream(row, headers);
+        const shaped = enforceSchema(raw);
+        const cleaned = cleanRow(shaped);
 
         batch.push({
           ...cleaned,
           __rowNumber: row.number
         });
 
-        if (active && batch.length >= BATCH_SIZE) {
-          await insertSafe(batch, session, active);
-          inserted += batch.length;
-          batch = [];
-        }
+      } catch (err) {
+        errors.push({
+          row: row.number,
+          field: null,
+          value: null,
+          message: err.message
+        });
+      }
+
+      // Process batch
+      if (batch.length >= BATCH_SIZE) {
+        await processBatch(batch, validDocs, errors);
+        batch = [];
       }
     }
-
-    // final flush
-    if (active && batch.length) {
-      await insertSafe(batch, session, active);
-      inserted += batch.length;
-    }
-
-    // 🚨 fail → rollback EVERYTHING
-    if (!active || errors.length) {
-      await session.abortTransaction();
-      return fail(errors);
-    }
-
-    await session.commitTransaction();
-
-    return { inserted };
-
-  } catch (err) {
-
-    // 🔥 NEVER reuse aborted txn
-    try {
-      if (session.inTransaction()) {
-        await session.abortTransaction();
-      }
-    } catch (_) {}
-
-    return fail([
-      {
-        row: null,
-        field: null,
-        value: null,
-        message: err.message
-      }
-    ]);
-
-  } finally {
-    session.endSession();
   }
+
+  // Final batch
+  if (batch.length) {
+    await processBatch(batch, validDocs, errors);
+  }
+
+  // 🚨 Stop if any validation errors
+  if (errors.length) {
+    return fail(errors);
+  }
+
+  // ✅ Insert only clean data
+  await VehicleRecord.insertMany(validDocs);
+
+  return { inserted: validDocs.length };
 };
+
+/* ================= GET ================= */
+
 export const getRecords = async (req) => {
   return await pagination(VehicleRecord, req.query, {
     searchFields: [
-      'supplierName', 'businessUnit', 'divisionDepotDepartment', 'costCentre', 'area', 'province', 'responsibleManager',
-      'regNo','contractNo', 'contractType', 'rateCategory', 'make', 'model', 'fuelType', 'engineCapacity',
-      'dealStatus', 'supplierResponsibleName'
+      "supplierName", "businessUnit", "divisionDepotDepartment", "costCentre", "area", "province", "responsibleManager",
+      "regNo", "contractNo", "contractType", "rateCategory", "make", "model", "fuelType", "engineCapacity",
+      "dealStatus", "supplierResponsibleName"
     ]
   });
-}
+};
 
-/*==================HELPERS========================*/
+/* ================= BATCH PROCESSING ================= */
+
+const processBatch = async (batch, validDocs, errors) => {
+  await validateBatchParallel(batch, errors);
+
+  // Only keep valid ones
+  const errorRows = new Set(errors.map(e => e.row));
+  const cleanDocs = batch.filter(doc => !errorRows.has(doc.__rowNumber));
+
+  validDocs.push(...cleanDocs);
+};
+
+/* ================= PARALLEL VALIDATION ================= */
+
+const runWithConcurrency = async (items, limit, worker) => {
+  let index = 0;
+
+  const workers = new Array(limit).fill(null).map(async () => {
+    while (index < items.length) {
+      const currentIndex = index++;
+      await worker(items[currentIndex], currentIndex);
+    }
+  });
+
+  await Promise.all(workers);
+};
+
+const validateBatchParallel = async (batch, errors) => {
+  await runWithConcurrency(batch, VALIDATION_CONCURRENCY, async (doc) => {
+    try {
+      const record = new VehicleRecord(doc);
+      await record.validate();
+    } catch (err) {
+      if (err.name === "ValidationError") {
+        Object.values(err.errors).forEach(e => {
+          errors.push({
+            row: doc.__rowNumber,
+            field: e.path,
+            value: e.value,
+            message: e.message
+          });
+        });
+      } else {
+        errors.push({
+          row: doc.__rowNumber,
+          field: null,
+          value: null,
+          message: err.message
+        });
+      }
+    }
+  });
+};
+
+/* ================= HELPERS ================= */
 
 const normalizeHeader = (str) => {
   if (!str) return "";
-  return str
-    .toString()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "")
-    .trim();
-};
-const headerMap = {
-  suppliername: "supplierName",
-  month: "month",
-  businessunit: "businessUnit",
-  divisiondepotdepartment: "divisionDepotDepartment",
-  costcentre: "costCentre",
-  area: "area",
-  province: "province",
-  responsiblemanager: "responsibleManager",
-
-  rfqsentdate: "rfqSentDate",
-  quotesreceiveddate: "quotesReceivedDate",
-  actualquotationdays: "actualQuotationDays",
-  targetquotationdays: "targetQuotationDays",
-  varianceforquotedays: "varianceForQuoteDays",
-
-  approvalofbestquotedate: "approvalOfBestQuoteDate",
-  vehicledeliverydate: "vehicleDeliveryDate",
-  actualdeliverydays: "actualDeliveryDays",
-  targetdeliverydays: "targetDeliveryDays",
-  variancefordeliverydays: "varianceForDeliveryDays",
-
-  regno: "regNo",
-  contractno: "contractNo",
-  contracttype: "contractType",
-  ratecategory: "rateCategory",
-
-  make: "make",
-  model: "model",
-  year: "year",
-  fueltype: "fuelType",
-  enginecapacity: "engineCapacity",
-
-  tyresallocated: "tyresAllocated",
-  tyresused: "tyresUsed",
-
-  retailprice: "retailPrice",
-  discountamount: "discountAmount",
-  discount: "discountPercent",
-  accessoryamount: "accessoryAmount",
-  financesundries: "financeSundries",
-
-  interest: "interestPercent",
-  residualvalue: "residualValue",
-  rv: "rvPercent",
-
-  startdate: "startDate",
-  enddate: "endDate",
-  contractperiod: "contractPeriod",
-
-  inclusivekmpermonth: "inclusiveKmPerMonth",
-  totalcontractkm: "totalContractKm",
-
-  licenceexpirydate: "licenceExpiryDate",
-
-  odostart: "odoStart",
-  odoend: "odoEnd",
-  kmtravelled: "kmTravelled",
-  kmtravelledltd: "kmTravelledLtd",
-  averageltdkm: "averageLtdKm",
-
-  fixedrental: "fixedRental",
-  repairsandmaintenance: "repairsAndMaintenance",
-  licencefee: "licenceFee",
-  trackingcostandservices: "trackingCostAndServices",
-  adminfee: "adminFee",
-
-  totalfixedrentalexclvat: "totalFixedRentalExclVat",
-  fixedrentalvat: "fixedRentalVat",
-  totalfixedrentalinclvat: "totalFixedRentalInclVat",
-
-  startdateofexcessbilling: "startDateOfExcessBilling",
-  enddateofexcessbilling: "endDateOfExcessBilling",
-
-  startodoofexcessbilling: "startOdoOfExcessBilling",
-  endodoofexcessbilling: "endOdoOfExcessBilling",
-
-  totalkmtravelled: "totalKmTravelled",
-  allowedkm: "allowedKm",
-  excesskmtravelled: "excessKmTravelled",
-
-  excessrmcpk: "excessRmCpk",
-  excessrvcpk: "excessRvCpk",
-
-  excessrmamount: "excessRmAmount",
-  excessrvamount: "excessRvAmount",
-
-  totalexcessamountexclvat: "totalExcessAmountExclVat",
-  excessvat: "excessVat",
-  totalexcessamountinclvat: "totalExcessAmountInclVat",
-
-  operatordefault: "operatorDefault",
-  accidentandwriteoffs: "accidentAndWriteOffs",
-  tyres: "tyres",
-  additionalcosts: "additionalCosts",
-  auxiliaryamount: "auxiliaryAmount",
-  oocp: "oocp",
-
-  fuelcost: "fuelCost",
-  fuellitres: "fuelLitres",
-  oilcost: "oilCost",
-  oillitres: "oilLitres",
-
-  monthlyfinescost: "monthlyFinesCost",
-  monthlyetollcost: "monthlyETollCost",
-
-  subtotalvariablecost: "subtotalVariableCost",
-  variablevat: "variableVat",
-  totalvariablecost: "totalVariableCost",
-
-  totalcostinclvat: "totalCostInclVat",
-  inputvat: "inputVat",
-  totalcostexclinputvat: "totalCostExclInputVat",
-
-  cpktco: "cpkTco",
-
-  maintenancedays: "maintenanceDays",
-  accidentsdays: "accidentsDays",
-  breakdownsdays: "breakdownsDays",
-
-  totalavailability: "totalAvailabilityPercent",
-
-  
-  restructuredcontractenddate: "restructuredContractEndDate",
-  restructuredcontractperiod: "restructuredContractPeriod",
-  restructuredinclusivekmpermonth: "restructuredInclusiveKmPerMonth",
-
-  fixedrentalpriortorestructure: "fixedRentalPriorToRestructure",
-  oversandundersincl5tolerance: "oversAndUndersInclTolerance",
-
-  estimatedreplacementdatetimekm: "estimatedReplacementDateTimeAndKm",
-  estimatedreplacementtime: "estimatedReplacementTime",
-  estimatedreplacementkm: "estimatedReplacementKm",
-
-  dealstatus: "dealStatus",
-  supplierresponsiblename: "supplierResponsibleName",
-
-  excessrmytd: "excessRmYtd",
-  excessrvytd: "excessRvYtd",
-  underutilisationrmytd: "underUtilisationRmYtd",
-  underutilisationrmcpk: "underUtilisationRmCpk",
-  totalunderutilisationrmamountexclvat: "totalUnderUtilisationRmAmountExclVat",
-  totalunderutilisationamountinclvat: "totalUnderUtilisationAmountInclVat",
-  datesold: "dateSold"
-};
-const DATE_FIELDS = new Set([
-  "month",
-  "rfqSentDate",
-  "quotesReceivedDate",
-  "approvalOfBestQuoteDate",
-  "vehicleDeliveryDate",
-  "startDate",
-  "endDate",
-  "licenceExpiryDate",
-  "startDateOfExcessBilling",
-  "endDateOfExcessBilling",
-  "restructuredContractEndDate",
-  "estimatedReplacementDateTimeAndKm",
-  "estimatedReplacementTime",
-  "dateSold"
-]);
-const BASE_SCHEMA = {
-  supplierName: null,
-  month: null,
-  businessUnit: null,
-  divisionDepotDepartment: null,
-  costCentre: null,
-  area: null,
-  province: null,
-  responsibleManager: null,
-
-  rfqSentDate: null,
-  quotesReceivedDate: null,
-  actualQuotationDays: null,
-  targetQuotationDays: null,
-  varianceForQuoteDays: null,
-
-  approvalOfBestQuoteDate: null,
-  vehicleDeliveryDate: null,
-  actualDeliveryDays: null,
-  targetDeliveryDays: null,
-  varianceForDeliveryDays: null,
-
-  regNo: null,
-  contractNo: null,
-  contractType: null,
-  rateCategory: null,
-
-  make: null,
-  model: null,
-  year: null,
-  fuelType: null,
-  engineCapacity: null,
-
-  tyresAllocated: null,
-  tyresUsed: null,
-
-  retailPrice: null,
-  discountAmount: null,
-  discountPercent: null,
-  accessoryAmount: null,
-  financeSundries: null,
-
-  interestPercent: null,
-  residualValue: null,
-  rvPercent: null,
-
-  startDate: null,
-  endDate: null,
-  contractPeriod: null,
-
-  inclusiveKmPerMonth: null,
-  totalContractKm: null,
-
-  licenceExpiryDate: null,
-  odoStart: null,
-  odoEnd: null,
-  kmTravelled: null,
-  kmTravelledLtd: null,
-  averageLtdKm: null,
-
-  fixedRental: null,
-  repairsAndMaintenance: null,
-  licenceFee: null,
-  trackingCostAndServices: null,
-  adminFee: null,
-
-  totalFixedRentalExclVat: null,
-  fixedRentalVat: null,
-  totalFixedRentalInclVat: null,
-
-  startDateOfExcessBilling: null,
-  endDateOfExcessBilling: null,
-
-  startOdoOfExcessBilling: null,
-  endOdoOfExcessBilling: null,
-
-  totalKmTravelled: null,
-  allowedKm: null,
-  excessKmTravelled: null,
-
-  excessRmCpk: null,
-  excessRvCpk: null,
-
-  excessRmAmount: null,
-  excessRvAmount: null,
-
-  totalExcessAmountExclVat: null,
-  excessVat: null,
-  totalExcessAmountInclVat: null,
-
-  operatorDefault: null,
-  accidentAndWriteOffs: null,
-  tyres: null,
-  additionalCosts: null,
-  auxiliaryAmount: null,
-  oocp: null,
-
-  fuelCost: null,
-  fuelLitres: null,
-  oilCost: null,
-  oilLitres: null,
-
-  monthlyFinesCost: null,
-  monthlyETollCost: null,
-
-  subtotalVariableCost: null,
-  variableVat: null,
-  totalVariableCost: null,
-
-  totalCostInclVat: null,
-  inputVat: null,
-  totalCostExclInputVat: null,
-
-  cpkTco: null,
-
-  maintenanceDays: null,
-  accidentsDays: null,
-  breakdownsDays: null,
-
-  totalAvailabilityPercent: null,
-
-  restructuredContractEndDate: null,
-  restructuredContractPeriod: null,
-  restructuredInclusiveKmPerMonth: null,
-
-  fixedRentalPriorToRestructure: null,
-  oversAndUndersInclTolerance: null,
-
-  estimatedReplacementDateTimeAndKm: null,
-  estimatedReplacementTime: null,
-  estimatedReplacementKm: null,
-
-  dealStatus: null,
-  supplierResponsibleName: null,
-
-  excessRmYtd: null,
-  excessRvYtd: null,
-  underUtilisationRmYtd: null,
-  underUtilisationRmCpk: null,
-  totalUnderUtilisationRmAmountExclVat: null,
-  totalUnderUtilisationAmountInclVat: null,
-  dateSold: null,
-};
-const enforceSchema = (row) => {
-  return { ...BASE_SCHEMA, ...row };
-}
-const mapRow = (row, headers) => {
-  const obj = {};
-
-  row.eachCell((cell, colNumber) => {
-    const key = headers[colNumber];
-    const value = getCellValue(cell, key);
-
-    if (key) {
-      obj[key] = value;
-    }
-  });
-
-  return computeDerivedFields(obj);
-};
-const cleanRow = (row) => {
-  const cleaned = {};
-
-  Object.keys(row).forEach((key) => {
-    let value = row[key];
-
-    if (value === "" || value === undefined) {
-      value = null;
-    }
-
-    cleaned[key] = value;
-  });
-
-  return cleaned;
-};
-
-const computeDerivedFields = (doc) => {
-  const result = { ...doc };
-
-  // Quote variance
-  if (
-    typeof result.actualQuotationDays === "number" &&
-    typeof result.targetQuotationDays === "number"
-  ) {
-    result.varianceForQuoteDays =
-      result.actualQuotationDays - result.targetQuotationDays;
-  }
-
-  // Delivery variance
-  if (
-    typeof result.actualDeliveryDays === "number" &&
-    typeof result.targetDeliveryDays === "number"
-  ) {
-    result.varianceForDeliveryDays =
-      result.actualDeliveryDays - result.targetDeliveryDays;
-  }
-
-  // Excess KM
-  if (
-    typeof result.totalKmTravelled === "number" &&
-    typeof result.allowedKm === "number"
-  ) {
-    result.excessKmTravelled =
-      result.totalKmTravelled - result.allowedKm;
-  }
-
-  return result;
-};
-const extractHeaders = (sheet) => {
-  const headers = {};
-  const firstRow = sheet.getRow(1);
-
-  const unmapped = [];
-
-  firstRow.eachCell((cell, colNumber) => {
-    let rawHeader = cell.value;
-
-    if (rawHeader && typeof rawHeader === "object") {
-      if (rawHeader.richText) {
-        rawHeader = rawHeader.richText.map(rt => rt.text).join("");
-      } else if (rawHeader.text) {
-        rawHeader = rawHeader.text;
-      } else {
-        rawHeader = String(rawHeader);
-      }
-    }
-
-    const normalized = normalizeHeader(rawHeader);
-    let key = headerMap[normalized];
-
-    if (normalized === "vat") {
-      const prev = normalizeHeader(firstRow.getCell(colNumber - 1).value);
-      const next = normalizeHeader(firstRow.getCell(colNumber + 1).value);
-
-      if (prev.includes("totalfixedrentalexclvat") && next.includes("totalfixedrentalinclvat")) {
-        key = "fixedRentalVat";
-      } else if (prev.includes("totalexcessamountexclvat") && next.includes("totalexcessamountinclvat")) {
-        key = "excessVat";
-      } else if (prev.includes("subtotalvariablecost") && next.includes("totalvariablecost")) {
-        key = "variableVat";
-      }
-    }
-
-    if (!key) {
-      unmapped.push({
-        rawHeader,
-        normalized,
-        colNumber
-      });
-    }
-
-    headers[colNumber] = key || null;
-  });
-
-  if (unmapped.length) {
-    const error = new Error("Unmapped headers found");
-    error.details = unmapped;
-    throw error;
-  }
-
-  return headers;
-};
-/*==================HELPERS========================*/
-
-const insertBatch = async (batch, session, allErrors) => {
-  try {
-    await VehicleRecord.insertMany(batch, {
-      session,
-      ordered: true
-    });
-  } catch (err) {
-
-    // 🔥 Mongoose validation errors
-    if (err.name === "ValidationError") {
-      Object.values(err.errors).forEach(e => {
-        const doc = batch[0]; // fallback if index missing
-
-        allErrors.push({
-          row: doc.__rowNumber,
-          field: e.path,
-          value: e.value,
-          message: e.message
-        });
-      });
-      return;
-    }
-
-    // 🔥 Mongo bulk write errors
-    if (err.writeErrors) {
-      err.writeErrors.forEach(e => {
-        const failedDoc = batch[e.index];
-
-        allErrors.push({
-          row: failedDoc?.__rowNumber,
-          field: null,
-          value: null,
-          message: e.errmsg
-        });
-      });
-      return;
-    }
-
-    throw err;
-  }
+  return str.toString().toLowerCase().replace(/[^a-z0-9]+/g, "").trim();
 };
 
 const extractHeadersFromStream = (row) => {
@@ -607,13 +159,13 @@ const mapRowStream = (row, headers) => {
     const key = headers[colNumber];
     if (!key) return;
 
-    obj[key] = getCellValue(cell, key);
+    obj[key] = getCellValue(cell);
   });
 
   return computeDerivedFields(obj);
 };
 
-const getCellValue = (cell, key) => {
+const getCellValue = (cell) => {
   let value = cell.value;
 
   if (value instanceof Date) return value;
@@ -635,14 +187,50 @@ const getCellValue = (cell, key) => {
   return value;
 };
 
-const insertSafe = async (batch, session, active) => {
-  if (!active || !session.inTransaction()) {
-    return; // 🔥 prevents txn reuse crash
+const enforceSchema = (row) => {
+  return { ...BASE_SCHEMA, ...row };
+};
+
+const cleanRow = (row) => {
+  const cleaned = {};
+
+  Object.keys(row).forEach((key) => {
+    let value = row[key];
+    if (value === "" || value === undefined) value = null;
+    cleaned[key] = value;
+  });
+
+  return cleaned;
+};
+
+const computeDerivedFields = (doc) => {
+  const result = { ...doc };
+
+  if (
+    typeof result.actualQuotationDays === "number" &&
+    typeof result.targetQuotationDays === "number"
+  ) {
+    result.varianceForQuoteDays =
+      result.actualQuotationDays - result.targetQuotationDays;
   }
 
-  await VehicleRecord.insertMany(batch, {
-    session
-  });
+  if (
+    typeof result.actualDeliveryDays === "number" &&
+    typeof result.targetDeliveryDays === "number"
+  ) {
+    result.varianceForDeliveryDays =
+      result.actualDeliveryDays - result.targetDeliveryDays;
+  }
+
+  if (
+    typeof result.totalKmTravelled === "number" &&
+    typeof result.allowedKm === "number"
+  ) {
+    result.excessKmTravelled =
+      result.totalKmTravelled - result.allowedKm;
+  }
+
+  return result;
 };
 
 const fail = (details) => {
