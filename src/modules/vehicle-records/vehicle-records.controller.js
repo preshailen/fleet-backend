@@ -7,7 +7,7 @@ export const uploadRecords = (req, res) => {
   let processingPromise;
 
   busboy.on("file", (fieldname, file) => {
-    processingPromise = uploadRecords(file);
+    processingPromise = vehicleRecordsService.uploadRecords(file);
   });
 
   busboy.on("finish", async () => {
