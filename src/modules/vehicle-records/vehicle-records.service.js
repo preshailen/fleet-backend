@@ -47,10 +47,10 @@ export const uploadRecords = async (stream) => {
     if (batch.length >= BATCH_SIZE && !paused) {
       paused = true;
 
-      worksheet.pause();                // ⛔ STOP stream
+      stream.pause();                // ⛔ STOP stream
       await processBatch(batch, validDocs, errors);
       batch = [];
-      worksheet.resume();               // ▶️ RESUME stream
+      stream.resume();               // ▶️ RESUME stream
 
       paused = false;
     }
