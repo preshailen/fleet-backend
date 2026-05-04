@@ -5,7 +5,7 @@ import mongoose from 'mongoose';
 
 export const uploadRecords = async (stream) => {
   const session = await mongoose.startSession();
-  session.startTransaction();
+  session.startTransaction({ maxCommitTimeMS: 240000 });
 
   let headers = {};
   let batch = [];
