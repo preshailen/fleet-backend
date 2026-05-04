@@ -4,67 +4,69 @@ import pagination from "../../utils/pagination.js";
 import mongoose from 'mongoose';
 
 export const uploadRecords = async (stream) => {
-  const session = await mongoose.startSession();
-  session.startTransaction({ maxCommitTimeMS: 240000 });
-
   let headers = {};
   let batch = [];
   const errors = [];
+  const allDocs = [];
+  
+  const workbook = new ExcelJS.stream.xlsx.WorkbookReader(stream);
 
-  try {
-    const workbook = new ExcelJS.stream.xlsx.WorkbookReader(stream);
+  for await (const worksheet of workbook) {
+    for await (const row of worksheet) {
+      if (row.number === 1) {
+        headers = extractHeadersFromStream(row);
+        continue;
+      }
 
-    for await (const worksheet of workbook) {
-      for await (const row of worksheet) {
-        if (row.number === 1) {
-          headers = extractHeadersFromStream(row);
-          continue;
-        }
+      try {
+        const raw = mapRowStream(row, headers);
+        const derived = computeDerivedFields(raw);
+        const cleaned = cleanRow(derived);
+        const shaped = enforceSchema(cleaned);
 
-        try {
-        
-          const raw = mapRowStream(row, headers);
-          const derived = computeDerivedFields(raw);
-          const cleaned = cleanRow(derived);
-          const shaped = enforceSchema(cleaned);
-
-          batch.push({
-            ...shaped,
-            __rowNumber: row.number
-          });
-
-        } catch (err) {
-          errors.push({
-            row: row.number,
-            field: null,
-            value: null,
-            message: err.message
-          });
-          await session.abortTransaction();
-          session.endSession();
-          throw errors;
-        }
-
-        if (batch.length >= BATCH_SIZE) {
-          await processBatch(batch, errors, session);
-          batch = [];
-        }
+        batch.push({
+          ...shaped,
+          __rowNumber: row.number
+        });
+      } catch (err) {
+        errors.push({
+          row: row.number,
+          field: null,
+          value: null,
+          message: err.message
+        });
+        throw errors;
+      }
+      if (batch.length >= BATCH_SIZE) {
+        await processBatch(batch, errors, allDocs);
+        batch = [];
       }
     }
+  }
 
     // Final batch
-    if (batch.length) {
-      await processBatch(batch, errors, session);
-      batch = [];
-    }
-    if (errors.length) {
-      throw new Error("Validation failed");
-    }
-    await session.commitTransaction();
+  if (batch.length) {
+    await processBatch(batch, errors, allDocs);
+    batch = [];
+  }
+  if (errors.length) {
+    throw new Error("Validation failed");
+  }
+
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      if (allDocs.length) {
+        await VehicleRecord.insertMany(allDocs, {
+          session,
+          ordered: true // stops on first DB error
+        });
+      }
+    });
+
     session.endSession();
     return true;
   } catch (err) {
-    await session.abortTransaction();
     session.endSession();
     throw err;
   }
@@ -525,7 +527,7 @@ const cleanRow = (row) => {
 
   return cleaned;
 };
-const processBatch = async (batch, errors, session) => {
+const processBatch = async (batch, errors, allDocs) => {
   const batchErrors = await validateBatchParallel(batch);
   if (batchErrors.length) {
     throw {
@@ -537,9 +539,7 @@ const processBatch = async (batch, errors, session) => {
   const errorRows = new Set(batchErrors.map(e => e.row));
   const cleanDocs = batch.filter(doc => !errorRows.has(doc.__rowNumber) && !isEmptyDoc(doc));
 
-  if (cleanDocs.length) {
-    await VehicleRecord.insertMany(cleanDocs, { session });
-  }
+  allDocs.push(...cleanDocs);
 };
 const fail = (details) => {
   const error = new Error("Vehicle record validation failed");
