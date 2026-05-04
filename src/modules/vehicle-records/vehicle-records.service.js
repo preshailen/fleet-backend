@@ -1,9 +1,82 @@
 import ExcelJS from "exceljs";
 import VehicleRecord from "../../models/vehicle-records/vehicleRecord.model.js";
 import pagination from "../../utils/pagination.js";
+import mongoose from 'mongoose';
 
-const BATCH_SIZE = 500;
-const VALIDATION_CONCURRENCY = 20;
+export const uploadRecords = async (stream) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  let headers = {};
+  let batch = [];
+  const errors = [];
+
+  try {
+    const workbook = new ExcelJS.stream.xlsx.WorkbookReader(stream);
+
+    for await (const worksheet of workbook) {
+      for await (const row of worksheet) {
+        if (row.number === 1) {
+          headers = extractHeadersFromStream(row);
+          continue;
+        }
+
+        try {
+        
+          const raw = mapRowStream(row, headers);
+          const derived = computeDerivedFields(raw);
+          const cleaned = cleanRow(derived);
+          const shaped = enforceSchema(cleaned);
+
+          batch.push({
+            ...shaped,
+            __rowNumber: row.number
+          });
+
+        } catch (err) {
+          errors.push({
+            row: row.number,
+            field: null,
+            value: null,
+            message: err.message
+          });
+          throw errors;
+        }
+
+        if (batch.length >= BATCH_SIZE) {
+          await processBatch(batch, errors, session);
+          batch = [];
+        }
+      }
+    }
+
+    // Final batch
+    if (batch.length) {
+      await processBatch(batch, errors, session);
+      batch = [];
+    }
+    if (errors.length) {
+      throw new Error("Validation failed");
+    }
+    await session.commitTransaction();
+    session.endSession();
+    return true;
+  } catch (err) {
+    await session.abortTransaction();
+    session.endSession();
+    throw err;
+  }
+};
+
+export const getRecords = async (req) => {
+  return await pagination(VehicleRecord, req.query, {
+    searchFields: [
+      "supplierName", "businessUnit", "divisionDepotDepartment", "costCentre", "area", "province", "responsibleManager",
+      "regNo", "contractNo", "contractType", "rateCategory", "make", "model", "fuelType", "engineCapacity",
+      "dealStatus", "supplierResponsibleName"
+    ]
+  });
+};
 
 /*==================DATA===========================*/
 const headerMap = {
@@ -310,79 +383,10 @@ const BASE_SCHEMA = {
   totalUnderUtilisationAmountInclVat: null,
   dateSold: null,
 };
-/*==================DATA===========================*/
-
 const REQUIRED_FIELDS = Object.keys(BASE_SCHEMA);
-
-
-export const uploadRecords = async (stream) => {
-  let headers = {};
-  let batch = [];
-  const errors = [];
-
-  const workbook = new ExcelJS.stream.xlsx.WorkbookReader(stream);
-
-  for await (const worksheet of workbook) {
-    for await (const row of worksheet) {
-      if (row.number === 1) {
-        headers = extractHeadersFromStream(row);
-        continue;
-      }
-
-      try {
-        
-        const raw = mapRowStream(row, headers);
-        const derived = computeDerivedFields(raw);
-        const cleaned = cleanRow(derived);
-        const shaped = enforceSchema(cleaned);
-
-        batch.push({
-          ...shaped,
-          __rowNumber: row.number
-        });
-
-      } catch (err) {
-        errors.push({
-          row: row.number,
-          field: null,
-          value: null,
-          message: err.message
-        });
-        throw errors;
-      }
-
-      if (batch.length >= BATCH_SIZE) {
-        await processBatch(batch, errors);
-        batch = [];
-      }
-      
-    }
-  }
-
-  // Final batch
-  if (batch.length) {
-    await processBatch(batch, errors);
-    batch = []; //
-  }
-
-  // 🚨 Stop if any validation errors
-  if (errors.length) {
-    return fail(errors);
-  }
-
-
-  return true;
-};
-
-export const getRecords = async (req) => {
-  return await pagination(VehicleRecord, req.query, {
-    searchFields: [
-      "supplierName", "businessUnit", "divisionDepotDepartment", "costCentre", "area", "province", "responsibleManager",
-      "regNo", "contractNo", "contractType", "rateCategory", "make", "model", "fuelType", "engineCapacity",
-      "dealStatus", "supplierResponsibleName"
-    ]
-  });
-};
+const BATCH_SIZE = 500;
+const VALIDATION_CONCURRENCY = 20;
+/*==================DATA===========================*/
 
 /* ================= HELPERS ================= */
 const normalizeHeader = (str) => {
@@ -414,12 +418,6 @@ const extractHeadersFromStream = (row) => {
         key = "variableVat";
       }
     }
-    console.log({
-  col: colNumber,
-  raw: getHeaderCellValue(cell),
-  normalized,
-  mappedTo: key
-});
     if (!key) {
       unmapped.push({
         rawHeaders: (cell.text || cell.value),
@@ -428,8 +426,7 @@ const extractHeadersFromStream = (row) => {
       });
       headers[colNumber] = null;
       return;
-    }
-    if (key) {
+    } else {
       headers[colNumber] = key;
       mappedFields.add(key);
       return;
@@ -526,7 +523,7 @@ const cleanRow = (row) => {
 
   return cleaned;
 };
-const processBatch = async (batch, errors) => {
+const processBatch = async (batch, errors, session) => {
   const batchErrors = await validateBatchParallel(batch);
   if (batchErrors.length) {
     throw {
@@ -539,9 +536,7 @@ const processBatch = async (batch, errors) => {
   const cleanDocs = batch.filter(doc => !errorRows.has(doc.__rowNumber) && !isEmptyDoc(doc));
 
   if (cleanDocs.length) {
-    await VehicleRecord.insertMany(cleanDocs, {
-      ordered: false
-    });
+    await VehicleRecord.insertMany(cleanDocs, { session });
   }
 };
 const fail = (details) => {
@@ -589,17 +584,12 @@ const validateBatchParallel = async (batch) => {
   });
   return errors;
 };
-/*==================HELPERS========================*/
-
-
 const isEmptyDoc = (doc) => {
   return Object.values(doc).every(
     v => v === null || v === undefined
   );
 };
-
 const isNumber = (v) => typeof v === "number" && !isNaN(v);
-
 const getHeaderCellValue = (cell) => {
   if (!cell) return "";
 
@@ -618,3 +608,4 @@ const getHeaderCellValue = (cell) => {
 
   return String(cell.value ?? "");
 };
+/*==================HELPERS========================*/
