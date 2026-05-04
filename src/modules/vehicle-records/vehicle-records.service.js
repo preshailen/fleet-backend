@@ -386,7 +386,7 @@ const BASE_SCHEMA = {
   dateSold: null,
 };
 const REQUIRED_FIELDS = Object.keys(BASE_SCHEMA);
-const BATCH_SIZE = 500;
+const BATCH_SIZE = 100;
 const VALIDATION_CONCURRENCY = 20;
 /*==================DATA===========================*/
 
