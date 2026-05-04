@@ -40,6 +40,8 @@ export const uploadRecords = async (stream) => {
             value: null,
             message: err.message
           });
+          await session.abortTransaction();
+          session.endSession();
           throw errors;
         }
 
