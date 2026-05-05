@@ -71,7 +71,6 @@ export const uploadRecords = async (stream) => {
     throw err;
   }
 };
-
 export const getRecords = async (req) => {
   return await pagination(VehicleRecord, req.query, {
     searchFields: [
@@ -80,6 +79,36 @@ export const getRecords = async (req) => {
       "dealStatus", "supplierResponsibleName"
     ]
   });
+};
+export const getTotals = async (id) => {
+  return await VehicleRecord.aggregate([
+    {
+      $match: {
+        month: { $ne: null },
+        [id]: { $ne: null }
+      }
+    },
+    {
+      $group: {
+        _id: {
+          group: `$${id}`,
+          year: { $year: "$month" }
+        },
+        total: { $sum: 1 }
+      }
+    },
+    {
+      $project: {
+        group: "$_id.group",
+        year: "$_id.year",
+        total: 1,
+        _id: 0
+      }
+    },
+    {
+      $sort: { year: 1 }
+    }
+  ]);
 };
 
 /*==================DATA===========================*/
@@ -393,15 +422,6 @@ const VALIDATION_CONCURRENCY = 20;
 /*==================DATA===========================*/
 
 /* ================= HELPERS ================= */
-const normalizeHeader = (str) => {
-  if (!str) return "";
-  return str
-    .toString()
-    .toLowerCase()
-    .replace(/[%]/g, "")        // remove %
-    .replace(/[^a-z0-9]+/g, "") // remove spaces/slashes/etc
-    .trim();
-};
 const extractHeadersFromStream = (row) => {
   const headers = {};
   const unmapped = [];
@@ -445,6 +465,33 @@ const extractHeadersFromStream = (row) => {
     throw error;
   }
   return headers;
+};
+const getHeaderCellValue = (cell) => {
+  if (!cell) return "";
+
+  // Priority order matters
+  if (cell.text) return cell.text;
+
+  if (cell.value?.richText) {
+    return cell.value.richText.map(t => t.text).join("");
+  }
+
+  if (cell.value?.text) return cell.value.text;
+
+  if (cell.value?.result) return cell.value.result;
+
+  if (typeof cell.value === "string") return cell.value;
+
+  return String(cell.value ?? "");
+};
+const normalizeHeader = (str) => {
+  if (!str) return "";
+  return str
+    .toString()
+    .toLowerCase()
+    .replace(/[%]/g, "")        // remove %
+    .replace(/[^a-z0-9]+/g, "") // remove spaces/slashes/etc
+    .trim();
 };
 const mapRowStream = (row, headers) => {
   const obj = [];
@@ -494,9 +541,6 @@ const getCellValue = (cell, key) => {
 
   return value;
 };
-const enforceSchema = (row) => {
-  return { ...BASE_SCHEMA, ...row };
-};
 const computeDerivedFields = (doc) => {
   const result = { ...doc };
   if (typeof result.actualQuotationDays === "number" && typeof result.targetQuotationDays === "number") {
@@ -527,6 +571,9 @@ const cleanRow = (row) => {
 
   return cleaned;
 };
+const enforceSchema = (row) => {
+  return { ...BASE_SCHEMA, ...row };
+};
 const processBatch = async (batch, errors, allDocs) => {
   const batchErrors = await validateBatchParallel(batch);
   if (batchErrors.length) {
@@ -540,23 +587,6 @@ const processBatch = async (batch, errors, allDocs) => {
   const cleanDocs = batch.filter(doc => !errorRows.has(doc.__rowNumber) && !isEmptyDoc(doc));
 
   allDocs.push(...cleanDocs);
-};
-const fail = (details) => {
-  const error = new Error("Vehicle record validation failed");
-  error.details = details;
-  throw error;
-};
-const runWithConcurrency = async (items, limit, worker) => {
-  let index = 0;
-
-  const workers = new Array(limit).fill(null).map(async () => {
-    while (index < items.length) {
-      const currentIndex = index++;
-      await worker(items[currentIndex], currentIndex);
-    }
-  });
-
-  await Promise.all(workers);
 };
 const validateBatchParallel = async (batch) => {
   const errors = [];
@@ -587,27 +617,18 @@ const validateBatchParallel = async (batch) => {
   return errors;
 };
 const isEmptyDoc = (doc) => {
-  return Object.values(doc).every(
-    v => v === null || v === undefined
-  );
+  return Object.values(doc).every(v => v === null || v === undefined);
 };
-const isNumber = (v) => typeof v === "number" && !isNaN(v);
-const getHeaderCellValue = (cell) => {
-  if (!cell) return "";
+const runWithConcurrency = async (items, limit, worker) => {
+  let index = 0;
 
-  // Priority order matters
-  if (cell.text) return cell.text;
+  const workers = new Array(limit).fill(null).map(async () => {
+    while (index < items.length) {
+      const currentIndex = index++;
+      await worker(items[currentIndex], currentIndex);
+    }
+  });
 
-  if (cell.value?.richText) {
-    return cell.value.richText.map(t => t.text).join("");
-  }
-
-  if (cell.value?.text) return cell.value.text;
-
-  if (cell.value?.result) return cell.value.result;
-
-  if (typeof cell.value === "string") return cell.value;
-
-  return String(cell.value ?? "");
+  await Promise.all(workers);
 };
 /*==================HELPERS========================*/

@@ -36,3 +36,13 @@ export const getRecords = async(req, res) => {
     res.status(500).json({ message: err.message });
   }
 }
+export const getTotals = async(req, res) => {
+  try {
+    if (!req.params.id) {
+      return res.status(400).json({ message: 'Id is missing'});
+    }
+    res.status(200).json(await vehicleRecordsService.getTotals(req.params.id));
+  } catch (err) {
+    res.status(500).json({ message: error.message });
+  }
+}
