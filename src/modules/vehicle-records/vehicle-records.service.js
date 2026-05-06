@@ -80,36 +80,6 @@ export const getRecords = async (req) => {
     ]
   });
 };
-export const getTotals = async (id) => {
-  return await VehicleRecord.aggregate([
-    {
-      $match: {
-        month: { $ne: null },
-        [id]: { $ne: null }
-      }
-    },
-    {
-      $group: {
-        _id: {
-          group: `$${id}`,
-          year: { $year: "$month" }
-        },
-        total: { $sum: 1 }
-      }
-    },
-    {
-      $project: {
-        group: "$_id.group",
-        year: "$_id.year",
-        total: 1,
-        _id: 0
-      }
-    },
-    {
-      $sort: { year: 1 }
-    }
-  ]);
-};
 
 /*==================DATA===========================*/
 const headerMap = {

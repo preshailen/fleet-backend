@@ -32,7 +32,7 @@ const pagination = async (model, reqQuery, options = {}) => {
     });
   }
 
-  let dataQuery = model.find(query).skip(skip).limit(limit).sort(sortOption);
+  let dataQuery = model.find(query).skip(skip).limit(limit).sort(sortOption).collation({ locale: 'en', numericOrdering: true });
 
   // populate support
   if (options.populate) {
