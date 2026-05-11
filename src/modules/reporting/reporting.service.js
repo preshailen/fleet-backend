@@ -1,9 +1,7 @@
 import VehicleRecord from "../../models/vehicle-records/vehicleRecord.model.js";
 import mongoose from 'mongoose';
 
-export const getTotals = async (period = 'year') => {
-  const isMonth = period === 'month';
-
+export const getTotals = async () => {
   const fields = [
     "businessUnit",
     "divisionDepotDepartment",
@@ -31,7 +29,7 @@ export const getTotals = async (period = 'year') => {
         _id: {
           group: `$${field}`,
           year: { $year: "$month" },
-          ...(isMonth && { month: { $month: "$month" } })
+          month: { $month: "$month" }
         },
         total: { $sum: 1 }
       }
@@ -40,15 +38,13 @@ export const getTotals = async (period = 'year') => {
       $project: {
         group: "$_id.group",
         year: "$_id.year",
-        ...(isMonth && { month: "$_id.month" }),
+        month: "$_id.month",
         total: 1,
         _id: 0
       }
     },
     {
-      $sort: isMonth
-        ? { year: 1, month: 1 }
-        : { year: 1 }
+      $sort: { year: 1, month: 1 }
     }
   ]);
 
