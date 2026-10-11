@@ -73,6 +73,8 @@ export const uploadRecords = async (stream) => {
 };
 export const getRecords = async (req) => {
   return await pagination(VehicleRecord, req.query, {
+    uniqueBy: 'regNo',
+    uniqueSort: { createdAt: 1, _id: 1 },
     searchFields: [
       "supplierName", "businessUnit", "divisionDepotDepartment", "costCentre", "area", "province", "responsibleManager",
       "regNo", "contractNo", "contractType", "rateCategory", "make", "model", "fuelType", "engineCapacity",

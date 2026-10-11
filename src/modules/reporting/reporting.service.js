@@ -7,7 +7,8 @@ export const getTotals = async () => {
     "divisionDepotDepartment",
     "costCentre",
     "responsibleManager",
-    "year"
+    "province",
+    "dealStatus",
   ];
 
   const buildPipeline = (field) => ([
@@ -64,10 +65,9 @@ export const getCumulativeTotals = async () => {
     "model",
     "fuelType",
     "engineCapacity",
-    "province",
     "area",
-    "dealStatus",
-    "supplierName"
+    "supplierName",
+    "year"
   ];
 
   // Start of previous year
@@ -80,10 +80,10 @@ export const getCumulativeTotals = async () => {
     {
       $match: {
         [field]: { $ne: null },
-        month: {
+        /*month: {
           $gte: startOfLastYear,
           $lte: currentMonth
-        }
+        }*/
       }
     },
 
@@ -132,6 +132,88 @@ export const getCumulativeTotals = async () => {
   return await VehicleRecord.aggregate([
     {
       $facet: facets
+    }
+  ]);
+};
+
+export const getCumulativeDrilldown = async (field, group) => {
+
+  const endDate = new Date();
+
+  const startDate = new Date(endDate.getFullYear(), endDate.getMonth() - 11, 1);
+
+  return await VehicleRecord.aggregate([
+    {
+      $match: {
+        [field]: group,
+        month: {
+          $gte: startDate,
+          $lte: endDate
+        }
+      }
+    },
+
+    // Monthly totals
+    {
+      $group: {
+        _id: {
+          year: { $year: "$month" },
+          month: { $month: "$month" }
+        },
+
+        total: { $sum: 1 }
+      }
+    },
+
+    {
+      $sort: {
+        "_id.year": 1,
+        "_id.month": 1
+      }
+    },
+
+    // Running cumulative total
+    {
+      $setWindowFields: {
+        sortBy: {
+          "_id.year": 1,
+          "_id.month": 1
+        },
+
+        output: {
+          cumulativeTotal: {
+            $sum: "$total",
+            window: {
+              documents: ["unbounded", "current"]
+            }
+          }
+        }
+      }
+    },
+
+    {
+      $project: {
+        _id: 0,
+
+        year: "$_id.year",
+        month: "$_id.month",
+
+        label: {
+          $dateToString: {
+            format: "%b %Y",
+            date: {
+              $dateFromParts: {
+                year: "$_id.year",
+                month: "$_id.month",
+                day: 1
+              }
+            }
+          }
+        },
+
+        total: 1,
+        cumulativeTotal: 1
+      }
     }
   ]);
 };
